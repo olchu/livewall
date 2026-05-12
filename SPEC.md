@@ -99,6 +99,26 @@ then renders the animated wallpaper above it.
 
 ---
 
+### 3.5 Lock Screen / Screensaver ⏳ v0.5
+
+macOS restricts app windows to the user session — they are always behind the lock screen UI.
+To show animated wallpaper during lock, a `ScreenSaver` extension (`.saver` bundle) is required.
+
+| Requirement | Status |
+|---|---|
+| `.saver` bundle target in Xcode | ⏳ |
+| `ScreenSaverView` subclass playing `AVPlayer` | ⏳ |
+| Shared `UserDefaults` via App Group to read `wallpaperURL` | ⏳ |
+| App Group entitlement in both targets | ⏳ |
+| Muted, looping playback matching main app behavior | ⏳ |
+
+App Group ID: `group.com.ochurkin.LiveWall`
+
+User flow: user sets LiveWall as their system screensaver in System Settings → Screen Saver.
+The same video plays during idle/screensaver and on the lock screen.
+
+---
+
 ### 3.4 Video Playback ✅
 
 | Requirement | Status |
@@ -228,8 +248,14 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 ├── FullscreenAppMonitor          ✅ FullscreenAppMonitor.swift
 │   └── NSWorkspace + CGWindowList
 │
-└── LoginItemManager              ⏳ v0.4
-    └── launch at login
+├── LoginItemManager              ⏳ v0.4
+│   └── launch at login
+│
+└── LiveWallScreenSaver           ⏳ v0.5
+    ├── .saver bundle target
+    ├── ScreenSaverView subclass
+    ├── AVPlayer (muted, looping)
+    └── reads wallpaperURL via App Group UserDefaults
 ```
 
 ---
@@ -294,6 +320,7 @@ Current behaviour (v0.3): app launches silently in menu bar, restores last wallp
 | **v0.2** | multi-monitor, sleep/wake recovery, display changes, persistence | ✅ Done |
 | **v0.3** | battery saver, pause on battery/fullscreen/lock, performance metrics | ✅ Done |
 | **v0.4** | settings window, playback modes UI, launch at login | ⏳ Next |
+| **v0.5** | screensaver extension — animated wallpaper on lock screen | ⏳ |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 
 ---
