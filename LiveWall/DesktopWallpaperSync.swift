@@ -3,16 +3,25 @@ import AVFoundation
 
 enum DesktopWallpaperSync {
     private static let previewsDirectoryName = "DesktopPreviews"
+    private static var syncTask: Task<Void, Never>?
 
     static func syncDesktopPicture(withVideoAt videoURL: URL) {
-        Task {
+        syncTask?.cancel()
+        syncTask = Task {
             guard let imageURL = await makePreviewImage(from: videoURL) else { return }
+
+            guard !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: imageURL)
+                return
+            }
 
             await MainActor.run {
                 for screen in NSScreen.screens {
                     try? NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: [:])
                 }
             }
+
+            guard !Task.isCancelled else { return }
 
             cleanupOldPreviewImages(keeping: imageURL)
         }
