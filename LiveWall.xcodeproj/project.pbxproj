@@ -13,8 +13,6 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A5966B5A2FB34AC400ACC0DC /* LiveWall */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = LiveWall;
 			sourceTree = "<group>";
 		};

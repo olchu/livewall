@@ -1,42 +1,31 @@
 import AppKit
 
-/// Handles system sleep/wake and screen sleep/wake events.
-/// Pauses playback on sleep to save resources; resumes and recreates windows on wake.
+/// Forwards system sleep/wake/screen events to PlaybackCoordinator.
 final class SystemEventMonitor {
-    private weak var manager: WallpaperWindowManaging?
+    private weak var coordinator: PlaybackCoordinator?
     private var observers: [Any] = []
 
-    init(manager: WallpaperWindowManaging) {
-        self.manager = manager
+    init(coordinator: PlaybackCoordinator) {
+        self.coordinator = coordinator
     }
 
     func start() {
-        let workspace = NSWorkspace.shared.notificationCenter
-
+        let ws = NSWorkspace.shared.notificationCenter
         observers = [
-            workspace.addObserver(forName: NSWorkspace.willSleepNotification,
-                                  object: nil, queue: .main) { [weak self] _ in
-                self?.manager?.pause()
-            },
-            workspace.addObserver(forName: NSWorkspace.didWakeNotification,
-                                  object: nil, queue: .main) { [weak self] _ in
-                // Recreate windows — display configuration may have changed during sleep
-                self?.manager?.setupWallpaperWindows()
-            },
-            workspace.addObserver(forName: NSWorkspace.screensDidSleepNotification,
-                                  object: nil, queue: .main) { [weak self] _ in
-                self?.manager?.pause()
-            },
-            workspace.addObserver(forName: NSWorkspace.screensDidWakeNotification,
-                                  object: nil, queue: .main) { [weak self] _ in
-                self?.manager?.resume()
-            },
+            ws.addObserver(forName: NSWorkspace.willSleepNotification,
+                           object: nil, queue: .main) { [weak self] _ in self?.coordinator?.handleSleep() },
+            ws.addObserver(forName: NSWorkspace.didWakeNotification,
+                           object: nil, queue: .main) { [weak self] _ in self?.coordinator?.handleWake() },
+            ws.addObserver(forName: NSWorkspace.screensDidSleepNotification,
+                           object: nil, queue: .main) { [weak self] _ in self?.coordinator?.handleScreenSleep() },
+            ws.addObserver(forName: NSWorkspace.screensDidWakeNotification,
+                           object: nil, queue: .main) { [weak self] _ in self?.coordinator?.handleScreenWake() },
         ]
     }
 
     func stop() {
-        let workspace = NSWorkspace.shared.notificationCenter
-        observers.forEach { workspace.removeObserver($0) }
+        let ws = NSWorkspace.shared.notificationCenter
+        observers.forEach { ws.removeObserver($0) }
         observers.removeAll()
     }
 }

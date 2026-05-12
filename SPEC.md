@@ -37,17 +37,20 @@ Primary objectives:
 ```
 LiveWall Lite
 ────────────────
-Select Wallpaper...    ✅
-Pause / Resume         ✅
+Select Wallpaper...         ✅
+Pause / Resume              ✅
 ────────────────
-CPU:  3.2%             ⏳ v0.3
-RAM:  87 MB            ⏳ v0.3
-GPU:  ~45 MB           ⏳ v0.3
+CPU:  3.2%                  ✅ PerformanceMonitor
+RAM:  87 MB                 ✅ PerformanceMonitor
+GPU:  ~45 MB (device)       ✅ PerformanceMonitor
 ────────────────
-Battery Saver: On/Off  ⏳ v0.3
-Start at Login: On/Off ⏳ v0.4
-Settings...            ⏳ v0.4
-Quit                   ✅
+Pause on Battery            ✅ PlaybackCoordinator + PowerModeMonitor
+Pause on Fullscreen App     ✅ PlaybackCoordinator + FullscreenAppMonitor
+Pause on Screen Lock        ✅ PlaybackCoordinator + DistributedNotificationCenter
+────────────────
+Start at Login: On/Off      ⏳ v0.4
+Settings...                 ⏳ v0.4
+Quit                        ✅
 ```
 
 Performance metrics notes:
@@ -55,6 +58,7 @@ Performance metrics notes:
 - RAM — per-process physical footprint, via `task_vm_info` (`phys_footprint`)
 - GPU — `MTLDevice.currentAllocatedSize` (device-wide, not per-process; sandbox limitation)
 - Metrics update only when menu is open (`NSMenuDelegate`) — no background polling
+- Fullscreen detection requires Screen Recording permission (macOS 10.15+); gracefully disabled without it
 
 Requirements:
 - ✅ no Dock icon (`LSUIElement = YES` + `.accessory` activation policy)
@@ -79,12 +83,12 @@ GIF: ❌ not used.
 
 | Requirement | Status |
 |---|---|
-| borderless fullscreen-sized window | ✅ `WallpaperWindow` |
+| borderless fullscreen-sized window | ✅ `NSWindow.makeWallpaperWindow(screen:)` factory |
 | below desktop icons | ✅ `CGWindowLevelForKey(.desktopWindow)` |
 | ignores mouse events | ✅ |
 | not focusable / non-activating | ✅ |
 | stays behind Finder | ✅ |
-| survive sleep/wake | ⏳ v0.2 |
+| survive sleep/wake | ✅ `SystemEventMonitor` → `PlaybackCoordinator.handleWake()` |
 | multiple monitors | ✅ `WallpaperWindowManager` iterates `NSScreen.screens` |
 
 ---
@@ -97,7 +101,7 @@ GIF: ❌ not used.
 | hardware accelerated decoding | ✅ `AVPlayerLayer` |
 | muted | ✅ `player.isMuted = true` |
 | pause/resume | ✅ |
-| display modes: Fill / Fit / Center | 🔄 enum defined, Center maps to Fit pending custom impl |
+| display modes: Fill / Fit / Center | 🔄 enum defined, Center maps to Fit (custom impl pending) |
 
 ---
 
@@ -110,10 +114,10 @@ GIF: ❌ not used.
 | `wallpaperURL` | `URL?` | ✅ persisted via security-scoped bookmark |
 | `playbackMode` | `PlaybackMode` | ✅ |
 | `startAtLogin` | `Bool` | ⏳ v0.4 |
-| `batterySaverEnabled` | `Bool` | ⏳ v0.3 |
-| `pauseOnBattery` | `Bool` | ⏳ v0.3 |
-| `pauseWhenFullscreen` | `Bool` | ⏳ v0.3 |
-| `pauseWhenLocked` | `Bool` | ⏳ v0.3 |
+| `batterySaverEnabled` | `Bool` | ✅ toggled via menu |
+| `pauseOnBattery` | `Bool` | ✅ `PowerModeMonitor` + `PlaybackCoordinator` |
+| `pauseWhenFullscreen` | `Bool` | ✅ `FullscreenAppMonitor` + `PlaybackCoordinator` |
+| `pauseWhenLocked` | `Bool` | ✅ `DistributedNotificationCenter` + `PlaybackCoordinator` |
 
 Persistence: ✅ `UserDefaults` via `SettingsStore`
 
@@ -140,10 +144,12 @@ Electron, WebView, GIF, HTML/CSS wallpapers, polling loops, 4K unoptimized, 60 F
 | `AVPlayerLayer` | ✅ |
 | Hardware video decoding | ✅ |
 | Lazy loading | ✅ load only when URL provided |
-| Pause during sleep | ✅ `SystemEventMonitor` |
-| Pause during lock screen | ⏳ v0.3 |
-| Pause on fullscreen app | ⏳ v0.3 |
-| Battery-aware behavior | ⏳ v0.3 |
+| Pause during sleep | ✅ `SystemEventMonitor` → `PlaybackCoordinator` |
+| Pause during lock screen | ✅ `PlaybackCoordinator` + `com.apple.screenIsLocked` |
+| Pause on fullscreen app | ✅ `FullscreenAppMonitor` (requires Screen Recording permission) |
+| Battery-aware behavior | ✅ `PowerModeMonitor` (IOKit, no polling) |
+| `CATransaction.disableActions` on resize | ✅ `VideoWallpaperView.layout()` |
+| `drawsAsynchronously` on playerLayer | ✅ |
 
 ---
 
@@ -151,13 +157,13 @@ Electron, WebView, GIF, HTML/CSS wallpapers, polling loops, 4K unoptimized, 60 F
 
 | Event | Status |
 |---|---|
-| system sleep / wake | ✅ `SystemEventMonitor` |
-| screen sleep / wake | ✅ `SystemEventMonitor` |
-| screen lock / unlock | ⏳ v0.3 |
+| system sleep / wake | ✅ `SystemEventMonitor` → `PlaybackCoordinator.handleSleep/Wake` |
+| screen sleep / wake | ✅ `SystemEventMonitor` → `PlaybackCoordinator.handleScreenSleep/Wake` |
+| screen lock / unlock | ✅ `PlaybackCoordinator` via `com.apple.screenIsLocked` distributed notification |
 | monitor connected / disconnected | ✅ `didChangeScreenParametersNotification` |
 | display layout changes | ✅ `handleDisplayChange()` |
-| fullscreen app open / close | ⏳ v0.3 |
-| power adapter changes | ⏳ v0.3 |
+| fullscreen app open / close | ✅ `FullscreenAppMonitor` (NSWorkspace + CGWindowList) |
+| power adapter changes | ✅ `PowerModeMonitor` (IOPSNotificationCreateRunLoopSource) |
 
 ---
 
@@ -173,7 +179,12 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 │
 ├── MenuBarController             ✅ MenuBarController.swift
 │   ├── NSStatusItem
-│   └── menu actions
+│   └── menu actions + toggles
+│
+├── PlaybackCoordinator           ✅ PlaybackCoordinator.swift
+│   ├── aggregates all pause conditions
+│   ├── user pause / battery / fullscreen / lock / sleep
+│   └── single source of truth for playback state
 │
 ├── WallpaperWindowManager        ✅ WallpaperWindowManager.swift
 │   ├── create windows
@@ -182,25 +193,29 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 │   └── monitor changes
 │
 ├── WallpaperWindow               ✅ WallpaperWindow.swift
-│   └── custom NSWindow
+│   └── NSWindow factory extension (macOS 26 compat)
 │
 ├── VideoWallpaperView            ✅ VideoWallpaperView.swift
 │   ├── AVPlayer
 │   ├── AVPlayerLayer
 │   └── loop handling
 │
+├── PerformanceMonitor            ✅ PerformanceMonitor.swift
+│   ├── CPU (per-process, mach task_threads)
+│   ├── RAM (phys_footprint)
+│   └── GPU (MTLDevice.currentAllocatedSize)
+│
 ├── SettingsStore                 ✅ SettingsStore.swift
-│   └── UserDefaults wrapper
+│   └── UserDefaults + security-scoped bookmarks
 │
 ├── SystemEventMonitor            ✅ SystemEventMonitor.swift
-│   ├── sleep/wake
-│   └── screen events
+│   └── sleep/wake → PlaybackCoordinator
 │
-├── PowerModeMonitor              ⏳ v0.3
-│   └── battery state tracking
+├── PowerModeMonitor              ✅ PowerModeMonitor.swift
+│   └── IOKit battery state, no polling
 │
-├── FullscreenAppMonitor          ⏳ v0.3
-│   └── fullscreen detection
+├── FullscreenAppMonitor          ✅ FullscreenAppMonitor.swift
+│   └── NSWorkspace + CGWindowList
 │
 └── LoginItemManager              ⏳ v0.4
     └── launch at login
@@ -256,7 +271,7 @@ struct AppSettings: Codable {
 4. Wallpaper starts immediately
 ```
 
-Current behaviour (v0.2): app launches silently in menu bar, restores last wallpaper automatically, user selects video via menu.
+Current behaviour (v0.3): app launches silently in menu bar, restores last wallpaper automatically, user selects video via menu. Pause conditions (battery/fullscreen/lock) configurable via menu toggles.
 
 ---
 
@@ -266,8 +281,8 @@ Current behaviour (v0.2): app launches silently in menu bar, restores last wallp
 |---|---|---|
 | **v0.1** | menu bar, MP4, rendering, loop, pause/resume, quit | ✅ Done |
 | **v0.2** | multi-monitor, sleep/wake recovery, display changes, persistence | ✅ Done |
-| **v0.3** | battery saver, pause on battery/fullscreen/lock | ⏳ |
-| **v0.4** | settings window, playback modes UI, launch at login | ⏳ |
+| **v0.3** | battery saver, pause on battery/fullscreen/lock, performance metrics | ✅ Done |
+| **v0.4** | settings window, playback modes UI, launch at login | ⏳ Next |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 
 ---
@@ -283,11 +298,12 @@ audio wallpapers · Windows support · web wallpapers · animated HTML
 
 | Risk | Mitigation |
 |---|---|
-| Desktop window layering | `CGWindowLevelForKey(.desktopWindow)` + tested v0.1 |
+| Desktop window layering | `CGWindowLevelForKey(.desktopWindow)` + factory pattern (macOS 26 compat) |
 | Mission Control / Spaces | `.canJoinAllSpaces` + `.stationary` collection behavior |
-| Sleep/wake edge cases | `NSWorkspace` notifications + window recreation |
-| Multiple monitor sync | per-screen `WallpaperWindow` instances |
-| Sandbox file access | ✅ security-scoped bookmarks (`SettingsStore`) |
+| Sleep/wake edge cases | `SystemEventMonitor` → `PlaybackCoordinator` + window recreation on wake |
+| Multiple monitor sync | per-screen `NSWindow` instances |
+| Sandbox file access | ✅ security-scoped bookmarks (`SettingsStore`) + `user-selected.read-write` entitlement |
+| Fullscreen detection without SR permission | `FullscreenAppMonitor` returns `false` — no false positives |
 
 ---
 
@@ -301,6 +317,9 @@ Language:              Swift
 Min Deployment:        macOS 13
 LSUIElement:           YES
 Sandbox:               YES
+Entitlements:          LiveWall/LiveWall.entitlements
+  com.apple.security.app-sandbox: YES
+  com.apple.security.files.user-selected.read-write: YES
 ```
 
 ---

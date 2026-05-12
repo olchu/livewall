@@ -3,6 +3,7 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
     private var wallpaperManager: WallpaperWindowManager?
+    private var playbackCoordinator: PlaybackCoordinator?
     private var systemEventMonitor: SystemEventMonitor?
     private let settings: SettingsStore = .shared
 
@@ -10,14 +11,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         let manager = WallpaperWindowManager()
+        let coordinator = PlaybackCoordinator(manager: manager)
         wallpaperManager = manager
-        menuBarController = MenuBarController(manager: manager)
+        playbackCoordinator = coordinator
+        menuBarController = MenuBarController(manager: manager, coordinator: coordinator)
 
-        // Restore wallpaper from previous session via security-scoped bookmark
         _ = settings.resolveAndStartAccessingWallpaper()
         manager.setupWallpaperWindows()
 
-        systemEventMonitor = SystemEventMonitor(manager: manager)
+        coordinator.start()
+
+        systemEventMonitor = SystemEventMonitor(coordinator: coordinator)
         systemEventMonitor?.start()
 
         NotificationCenter.default.addObserver(
@@ -30,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         systemEventMonitor?.stop()
+        playbackCoordinator?.stop()
         wallpaperManager?.destroyWallpaperWindows()
         settings.stopAccessingWallpaper()
     }

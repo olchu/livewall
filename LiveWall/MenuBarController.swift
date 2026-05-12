@@ -4,18 +4,24 @@ import UniformTypeIdentifiers
 final class MenuBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private weak var manager: WallpaperWindowManaging?
+    private weak var coordinator: PlaybackCoordinator?
     private let settings: SettingsStore
     private let performance = PerformanceMonitor()
-    private var isPaused = false
 
     private weak var pauseMenuItem: NSMenuItem?
+    private weak var pauseOnBatteryItem: NSMenuItem?
+    private weak var pauseOnFullscreenItem: NSMenuItem?
+    private weak var pauseOnLockItem: NSMenuItem?
     private weak var cpuMenuItem: NSMenuItem?
     private weak var ramMenuItem: NSMenuItem?
     private weak var gpuMenuItem: NSMenuItem?
 
-    init(manager: WallpaperWindowManaging, settings: SettingsStore = .shared) {
-        self.manager = manager
-        self.settings = settings
+    init(manager: WallpaperWindowManaging,
+         coordinator: PlaybackCoordinator,
+         settings: SettingsStore = .shared) {
+        self.manager     = manager
+        self.coordinator = coordinator
+        self.settings    = settings
         super.init()
         setupStatusItem()
     }
@@ -37,15 +43,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                 keyEquivalent: "").then { $0.target = self })
         menu.addItem(.separator())
 
-        let pauseItem = NSMenuItem(title: "Pause",
-                                   action: #selector(togglePause),
-                                   keyEquivalent: "")
+        // Pause / Resume
+        let pauseItem = NSMenuItem(title: "Pause", action: #selector(togglePause), keyEquivalent: "")
         pauseItem.target = self
         pauseMenuItem = pauseItem
         menu.addItem(pauseItem)
 
-        // Performance section
         menu.addItem(.separator())
+
+        // Behaviour toggles
+        pauseOnBatteryItem   = addToggle(to: menu, title: "Pause on Battery",       action: #selector(toggleBattery),    state: settings.settings.pauseOnBattery)
+        pauseOnFullscreenItem = addToggle(to: menu, title: "Pause on Fullscreen App", action: #selector(toggleFullscreen), state: settings.settings.pauseWhenFullscreen)
+        pauseOnLockItem      = addToggle(to: menu, title: "Pause on Screen Lock",    action: #selector(toggleLock),       state: settings.settings.pauseWhenLocked)
+
+        menu.addItem(.separator())
+
+        // Performance stats
         let cpuItem = makeStatItem("CPU:  —")
         let ramItem = makeStatItem("RAM:  —")
         let gpuItem = makeStatItem("GPU:  — (device)")
@@ -63,6 +76,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return menu
     }
 
+    private func addToggle(to menu: NSMenu, title: String, action: Selector, state: Bool) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.state = state ? .on : .off
+        menu.addItem(item)
+        return item
+    }
+
     private func makeStatItem(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
@@ -77,6 +98,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
+        // Sync toggle states in case they changed programmatically
+        pauseOnBatteryItem?.state    = settings.settings.pauseOnBattery      ? .on : .off
+        pauseOnFullscreenItem?.state = settings.settings.pauseWhenFullscreen  ? .on : .off
+        pauseOnLockItem?.state       = settings.settings.pauseWhenLocked      ? .on : .off
+
         let snap = performance.snapshot()
         updateStat(cpuMenuItem, label: "CPU", value: snap.cpuFormatted)
         updateStat(ramMenuItem, label: "RAM", value: snap.ramFormatted)
@@ -100,11 +126,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         panel.title = "Choose a wallpaper video"
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-
         var types: [UTType] = [.mpeg4Movie, .quickTimeMovie]
         if let m4v = UTType(filenameExtension: "m4v") { types.append(m4v) }
         panel.allowedContentTypes = types
-
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         settings.setWallpaperURL(url)
@@ -112,14 +136,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func togglePause() {
-        isPaused.toggle()
-        if isPaused {
-            manager?.pause()
-            pauseMenuItem?.title = "Resume"
-        } else {
-            manager?.resume()
-            pauseMenuItem?.title = "Pause"
-        }
+        coordinator?.toggleUserPause()
+        pauseMenuItem?.title = coordinator?.isUserPaused == true ? "Resume" : "Pause"
+    }
+
+    @objc private func toggleBattery() {
+        settings.settings.pauseOnBattery.toggle()
+        pauseOnBatteryItem?.state = settings.settings.pauseOnBattery ? .on : .off
+    }
+
+    @objc private func toggleFullscreen() {
+        settings.settings.pauseWhenFullscreen.toggle()
+        pauseOnFullscreenItem?.state = settings.settings.pauseWhenFullscreen ? .on : .off
+    }
+
+    @objc private func toggleLock() {
+        settings.settings.pauseWhenLocked.toggle()
+        pauseOnLockItem?.state = settings.settings.pauseWhenLocked ? .on : .off
     }
 }
 

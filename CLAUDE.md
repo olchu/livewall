@@ -28,7 +28,11 @@ LiveWall/                          ← project root
     ├── WallpaperWindowManager.swift   manages one WallpaperWindow per NSScreen
     ├── WallpaperWindow.swift          borderless NSWindow at desktop level
     ├── VideoWallpaperView.swift       NSView + AVPlayerLayer, seamless loop
-    ├── SystemEventMonitor.swift       sleep/wake/screen events via NSWorkspace
+    ├── PlaybackCoordinator.swift      aggregates all pause conditions (user/battery/fullscreen/lock/sleep)
+    ├── SystemEventMonitor.swift       sleep/wake/screen events via NSWorkspace → PlaybackCoordinator
+    ├── PowerModeMonitor.swift         IOKit battery detection, no polling
+    ├── FullscreenAppMonitor.swift     NSWorkspace + CGWindowList fullscreen detection
+    ├── PerformanceMonitor.swift       CPU (mach task_threads), RAM (phys_footprint), GPU (MTLDevice)
     ├── SettingsStore.swift            UserDefaults + security-scoped bookmarks
     ├── AppSettings.swift              Codable settings struct
     └── PlaybackMode.swift             enum: fill / fit / center
@@ -84,16 +88,16 @@ xcodebuild ... build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED"
 |---|---|
 | v0.1 Core MVP | ✅ Done |
 | v0.2 Stability | ✅ Done |
-| v0.3 Optimization | ⏳ Next |
-| v0.4 Settings UI | ⏳ |
+| v0.3 Optimization | ✅ Done |
+| v0.4 Settings UI | ⏳ Next |
 | v1.0 Production | ⏳ |
 
 Full feature status → see `SPEC.md`.
 
 ---
 
-## v0.3 Planned Components
+## v0.4 Planned Components
 
-- `PowerModeMonitor` — pause on battery (`IOKit` / `NSWorkspace.didChangeExternalDisplaysNotification`)
-- `FullscreenAppMonitor` — pause when a fullscreen app is active (`NSWorkspace.activeSpaceDidChangeNotification` + accessibility)
-- Lock screen pause — `com.apple.screenIsLocked` distributed notification
+- `LoginItemManager` — launch at login via `ServiceManagement.SMAppService`
+- Settings window — SwiftUI `Settings` scene with playback modes UI (Fill / Fit / Center)
+- `PlaybackMode` UI — wire `videoGravity` on `AVPlayerLayer` per mode (`resizeAspectFill` / `resizeAspect` / `resize`)
