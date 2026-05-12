@@ -55,7 +55,7 @@ final class MenuBarController {
 
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        settings.settings.wallpaperURL = url
+        settings.setWallpaperURL(url)
         manager?.reloadWallpaper()
     }
 
