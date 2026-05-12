@@ -38,6 +38,8 @@ Primary objectives:
 LiveWall Lite
 ────────────────
 Select Wallpaper...         ✅
+Optimize selected video      ✅ optional flow during selection
+Reveal Optimized Videos      ✅ opens optimized-copy folder
 Pause / Resume              ✅
 ────────────────
 CPU:  3.2%                  ✅ PerformanceMonitor
@@ -76,6 +78,15 @@ Supported formats:
 
 Recommended encoding: H.264 or H.265 / 24–30 FPS / 1080p–1440p / no audio.  
 GIF: ❌ not used.
+
+Optional optimizer:
+- ✅ user can create an optimized local copy when selecting a wallpaper
+- ✅ optimized files are stored under Application Support / LiveWall / OptimizedWallpapers
+- ✅ original user video is never modified
+- ✅ optimizer prefers built-in AVFoundation 1080p export for lower decode cost
+- ✅ success notification confirms the optimized file
+- ✅ failed optimization falls back to the original video and shows an alert
+- 🔄 future: explicit FPS / bitrate controls via AVAssetReader + AVAssetWriter if needed
 
 ---
 
@@ -176,6 +187,7 @@ Electron, WebView, GIF, HTML/CSS wallpapers, polling loops, 4K unoptimized, 60 F
 | Battery-aware behavior | ✅ `PowerModeMonitor` (IOKit, no polling) |
 | `CATransaction.disableActions` on resize | ✅ `VideoWallpaperView.layout()` |
 | `drawsAsynchronously` on playerLayer | ✅ |
+| Optimized local video copy | ✅ `OptimizedVideoExporter` via AVFoundation export presets |
 
 ---
 
@@ -230,6 +242,11 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 │   ├── extracts preview frame with AVAssetImageGenerator
 │   ├── stores cached JPG in Application Support
 │   └── sets NSWorkspace desktop picture for menu bar contrast
+│
+├── OptimizedVideoExporter        ✅ OptimizedVideoExporter.swift
+│   ├── creates lower-cost playback copies via AVAssetExportSession
+│   ├── stores files in Application Support / OptimizedWallpapers
+│   └── leaves source video unchanged
 │
 ├── PerformanceMonitor            ✅ PerformanceMonitor.swift
 │   ├── CPU (per-process, mach task_threads)

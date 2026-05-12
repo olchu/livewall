@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 import UniformTypeIdentifiers
 
 final class MenuBarController: NSObject, NSMenuDelegate {
@@ -15,6 +16,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private weak var cpuMenuItem: NSMenuItem?
     private weak var ramMenuItem: NSMenuItem?
     private weak var gpuMenuItem: NSMenuItem?
+    private var optimizationTask: Task<Void, Never>?
+    private let notificationCenter = UNUserNotificationCenter.current()
 
     init(manager: WallpaperWindowManaging,
          coordinator: PlaybackCoordinator,
@@ -23,6 +26,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.coordinator = coordinator
         self.settings    = settings
         super.init()
+        requestNotificationPermission()
         setupStatusItem()
     }
 
@@ -40,6 +44,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem(title: "Select Wallpaper…",
                                 action: #selector(selectWallpaper),
+                                keyEquivalent: "").then { $0.target = self })
+        menu.addItem(NSMenuItem(title: "Reveal Optimized Videos",
+                                action: #selector(revealOptimizedVideos),
                                 keyEquivalent: "").then { $0.target = self })
         menu.addItem(.separator())
 
@@ -131,9 +138,112 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         panel.allowedContentTypes = types
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        switch optimizationChoice() {
+        case .optimize:
+            optimizeAndApplyWallpaper(from: url)
+        case .original:
+            applyWallpaper(url)
+        case .cancel:
+            return
+        }
+    }
+
+    private enum OptimizationChoice {
+        case optimize
+        case original
+        case cancel
+    }
+
+    private func optimizationChoice() -> OptimizationChoice {
+        let alert = NSAlert()
+        alert.messageText = "Optimize video for lower CPU?"
+        alert.informativeText = "LiveWall can create an app-owned 1080p playback copy. The original video will not be changed."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Optimize Copy")
+        alert.addButton(withTitle: "Use Original")
+        alert.addButton(withTitle: "Cancel")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return .optimize
+        case .alertSecondButtonReturn:
+            return .original
+        default:
+            return .cancel
+        }
+    }
+
+    private func optimizeAndApplyWallpaper(from sourceURL: URL) {
+        optimizationTask?.cancel()
+        optimizationTask = Task { [weak self] in
+            guard let self else { return }
+            self.statusItem?.button?.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath",
+                                                     accessibilityDescription: "Optimizing")
+            do {
+                let didStartAccessing = sourceURL.startAccessingSecurityScopedResource()
+                defer {
+                    if didStartAccessing {
+                        sourceURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+                let optimizedURL = try await OptimizedVideoExporter.exportOptimizedCopy(from: sourceURL)
+                self.applyWallpaper(optimizedURL)
+                self.notifyOptimizationSuccess(optimizedURL)
+            } catch {
+                self.applyWallpaper(sourceURL)
+                self.showOptimizationError(error, fallbackURL: sourceURL)
+            }
+            self.statusItem?.button?.image = NSImage(systemSymbolName: "play.rectangle.fill",
+                                                     accessibilityDescription: "LiveWall")
+        }
+    }
+
+    private func applyWallpaper(_ url: URL) {
         settings.setWallpaperURL(url)
         DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
         manager?.reloadWallpaper()
+    }
+
+    private func requestNotificationPermission() {
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func notifyOptimizationSuccess(_ url: URL) {
+        let content = UNMutableNotificationContent()
+        content.title = "LiveWall"
+        content.body = "Optimized copy created: \(url.lastPathComponent)"
+        content.sound = nil
+
+        let request = UNNotificationRequest(
+            identifier: "optimized-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        notificationCenter.add(request)
+    }
+
+    private func showOptimizationError(_ error: Error, fallbackURL: URL) {
+        let alert = NSAlert(error: error)
+        alert.messageText = "Could not optimize this video"
+        alert.informativeText = "LiveWall is using the original video instead:\n\(fallbackURL.lastPathComponent)"
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Reveal Original")
+
+        if alert.runModal() == .alertSecondButtonReturn {
+            NSWorkspace.shared.activateFileViewerSelecting([fallbackURL])
+        }
+    }
+
+    @objc private func revealOptimizedVideos() {
+        do {
+            let directory = try OptimizedVideoExporter.optimizedWallpapersDirectory()
+            NSWorkspace.shared.open(directory)
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Could not open optimized videos folder"
+            alert.runModal()
+        }
     }
 
     @objc private func togglePause() {
