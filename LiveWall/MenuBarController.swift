@@ -132,6 +132,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         settings.setWallpaperURL(url)
+        DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
         manager?.reloadWallpaper()
     }
 

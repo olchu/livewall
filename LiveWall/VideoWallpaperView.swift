@@ -6,15 +6,14 @@ final class VideoWallpaperView: NSView, VideoPlayback {
     private var playerLayer: AVPlayerLayer?
     private var loopObserver: Any?
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        // Set up layer backing once — avoids layout recursion if loadVideo is called during layout
-        wantsLayer = true
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureBackingLayer()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        wantsLayer = true
+        configureBackingLayer()
     }
 
     override func layout() {
@@ -39,7 +38,9 @@ final class VideoWallpaperView: NSView, VideoPlayback {
         let layer = AVPlayerLayer(player: player)
         layer.frame = bounds
         layer.videoGravity = .resizeAspectFill
+        layer.backgroundColor = NSColor.black.cgColor
         layer.drawsAsynchronously = true
+        wantsLayer = true
         self.layer?.addSublayer(layer)
 
         loopObserver = NotificationCenter.default.addObserver(
@@ -70,6 +71,11 @@ final class VideoWallpaperView: NSView, VideoPlayback {
         case .fit:    playerLayer?.videoGravity = .resizeAspect
         case .center: playerLayer?.videoGravity = .resizeAspect
         }
+    }
+
+    private func configureBackingLayer() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
     }
 
     private func cleanup() {

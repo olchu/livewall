@@ -13,7 +13,8 @@ final class WallpaperWindowManager: WallpaperWindowManaging {
         destroyWallpaperWindows()
         for screen in NSScreen.screens {
             let window = NSWindow.makeWallpaperWindow(screen: screen)
-            let view = VideoWallpaperView(frame: screen.frame)
+            let view = VideoWallpaperView(frame: CGRect(origin: .zero, size: screen.frame.size))
+            view.autoresizingMask = [.width, .height]
             window.contentView = view
             if let url = settings.settings.wallpaperURL {
                 view.loadVideo(url: url)

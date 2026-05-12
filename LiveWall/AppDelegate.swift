@@ -16,7 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         playbackCoordinator = coordinator
         menuBarController = MenuBarController(manager: manager, coordinator: coordinator)
 
-        _ = settings.resolveAndStartAccessingWallpaper()
+        if let url = settings.resolveAndStartAccessingWallpaper() {
+            DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
+        }
         manager.setupWallpaperWindows()
 
         coordinator.start()
@@ -40,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func displaysChanged() {
+        if let url = settings.settings.wallpaperURL {
+            DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
+        }
         wallpaperManager?.handleDisplayChange()
     }
 }
