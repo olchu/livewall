@@ -2,7 +2,7 @@ import AppKit
 import AVFoundation
 
 enum DesktopWallpaperSync {
-    private static let imageFileName = "DesktopPreview.jpg"
+    private static let previewsDirectoryName = "DesktopPreviews"
 
     static func syncDesktopPicture(withVideoAt videoURL: URL) {
         Task {
@@ -13,6 +13,8 @@ enum DesktopWallpaperSync {
                     try? NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: [:])
                 }
             }
+
+            cleanupOldPreviewImages(keeping: imageURL)
         }
     }
 
@@ -35,8 +37,13 @@ enum DesktopWallpaperSync {
         }
 
         let bitmap = NSBitmapImageRep(cgImage: cgImage)
-        guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92]),
-              let destinationURL = previewImageURL() else {
+        guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92]) else {
+            return nil
+        }
+        let destinationURL: URL
+        do {
+            destinationURL = try previewImageURL()
+        } catch {
             return nil
         }
 
@@ -52,10 +59,38 @@ enum DesktopWallpaperSync {
         }
     }
 
-    private static func previewImageURL() -> URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?
+    private static func previewImageURL() throws -> URL {
+        let baseURL = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        return baseURL
             .appendingPathComponent("LiveWall", isDirectory: true)
-            .appendingPathComponent(imageFileName)
+            .appendingPathComponent(previewsDirectoryName, isDirectory: true)
+            .appendingPathComponent("DesktopPreview-\(UUID().uuidString).jpg")
+    }
+
+    private static func cleanupOldPreviewImages(keeping currentURL: URL) {
+        let directory = currentURL.deletingLastPathComponent()
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let oldPreviews = files
+            .filter { $0 != currentURL && $0.pathExtension.lowercased() == "jpg" }
+            .sorted {
+                let lhsDate = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let rhsDate = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return lhsDate > rhsDate
+            }
+            .dropFirst(2)
+
+        for url in oldPreviews {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }

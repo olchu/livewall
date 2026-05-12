@@ -106,7 +106,9 @@ Optional optimizer:
 macOS chooses menu bar text color and top-bar material from the system desktop picture,
 not from the custom desktop-level video window. When a video wallpaper is selected or
 restored, LiveWall extracts a still frame and sets it as the real desktop picture first,
-then renders the animated wallpaper above it.
+then renders the animated wallpaper above it. Preview images are written to unique
+Application Support URLs so macOS refreshes cached desktop / lock-screen imagery
+when a different video is selected.
 
 ---
 
@@ -240,7 +242,7 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 │
 ├── DesktopWallpaperSync          ✅ DesktopWallpaperSync.swift
 │   ├── extracts preview frame with AVAssetImageGenerator
-│   ├── stores cached JPG in Application Support
+│   ├── stores unique cached JPG previews in Application Support
 │   └── sets NSWorkspace desktop picture for menu bar contrast
 │
 ├── OptimizedVideoExporter        ✅ OptimizedVideoExporter.swift
