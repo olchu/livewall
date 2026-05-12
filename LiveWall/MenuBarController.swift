@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import UserNotifications
 import UniformTypeIdentifiers
 
@@ -13,11 +14,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private weak var pauseOnBatteryItem: NSMenuItem?
     private weak var pauseOnFullscreenItem: NSMenuItem?
     private weak var pauseOnLockItem: NSMenuItem?
+    private weak var startAtLoginItem: NSMenuItem?
     private weak var cpuMenuItem: NSMenuItem?
     private weak var ramMenuItem: NSMenuItem?
     private weak var gpuMenuItem: NSMenuItem?
     private var optimizationTask: Task<Void, Never>?
     private let notificationCenter = UNUserNotificationCenter.current()
+    private let loginItemManager = LoginItemManager.shared
 
     init(manager: WallpaperWindowManaging,
          coordinator: PlaybackCoordinator,
@@ -64,6 +67,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         pauseOnLockItem      = addToggle(to: menu, title: "Pause on Screen Lock",    action: #selector(toggleLock),       state: settings.settings.pauseWhenLocked)
 
         menu.addItem(.separator())
+        startAtLoginItem = addToggle(to: menu, title: "Start at Login", action: #selector(toggleStartAtLogin), state: settings.settings.startAtLogin)
+        menu.addItem(makeSettingsMenuItem())
+
+        menu.addItem(.separator())
 
         // Performance stats
         let cpuItem = makeStatItem("CPU:  —")
@@ -102,6 +109,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return item
     }
 
+    private func makeSettingsMenuItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        let hostingView = NSHostingView(rootView: SettingsMenuItemView())
+        hostingView.frame = NSRect(x: 0, y: 0, width: 220, height: 24)
+        item.view = hostingView
+        return item
+    }
+
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -109,6 +124,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         pauseOnBatteryItem?.state    = settings.settings.pauseOnBattery      ? .on : .off
         pauseOnFullscreenItem?.state = settings.settings.pauseWhenFullscreen  ? .on : .off
         pauseOnLockItem?.state       = settings.settings.pauseWhenLocked      ? .on : .off
+        startAtLoginItem?.state      = loginItemManager.syncSettingsState(settings) ? .on : .off
 
         let snap = performance.snapshot()
         updateStat(cpuMenuItem, label: "CPU", value: snap.cpuFormatted)
@@ -264,6 +280,42 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func toggleLock() {
         settings.settings.pauseWhenLocked.toggle()
         pauseOnLockItem?.state = settings.settings.pauseWhenLocked ? .on : .off
+    }
+
+    @objc private func toggleStartAtLogin() {
+        let enabled = !loginItemManager.isEnabled
+        do {
+            try loginItemManager.setEnabled(enabled)
+            settings.settings.startAtLogin = loginItemManager.isEnabled
+            startAtLoginItem?.state = settings.settings.startAtLogin ? .on : .off
+        } catch {
+            settings.settings.startAtLogin = loginItemManager.isEnabled
+            startAtLoginItem?.state = settings.settings.startAtLogin ? .on : .off
+            let alert = NSAlert(error: error)
+            alert.messageText = "Could not update Start at Login"
+            alert.runModal()
+        }
+    }
+
+}
+
+private struct SettingsMenuItemView: View {
+    var body: some View {
+        SettingsLink {
+            HStack(spacing: 8) {
+                Text("Settings...")
+                Spacer()
+                Text("⌘,")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 192, height: 24)
+            .padding(.horizontal, 14)
+            .contentShape(Rectangle())
+        }
+        .simultaneousGesture(TapGesture().onEnded {
+            SettingsWindowPresenter.prepareToOpenSettings()
+        })
+        .buttonStyle(.plain)
     }
 }
 

@@ -50,8 +50,8 @@ Pause on Battery            ✅ PlaybackCoordinator + PowerModeMonitor
 Pause on Fullscreen App     ✅ PlaybackCoordinator + FullscreenAppMonitor
 Pause on Screen Lock        ✅ PlaybackCoordinator + DistributedNotificationCenter
 ────────────────
-Start at Login: On/Off      ⏳ v0.4
-Settings...                 ⏳ v0.4
+Start at Login: On/Off      ✅ `LoginItemManager` + `SMAppService`
+Settings...                 ✅ SwiftUI Settings scene
 Quit                        ✅
 ```
 
@@ -140,7 +140,7 @@ The same video plays during idle/screensaver and on the lock screen.
 | hardware accelerated decoding | ✅ `AVPlayerLayer` |
 | muted | ✅ `player.isMuted = true` |
 | pause/resume | ✅ |
-| display modes: Fill / Fit / Center | 🔄 enum defined, Center maps to Fit (custom impl pending) |
+| display modes: Fill / Fit / Center | ✅ Settings UI updates `AVPlayerLayer.videoGravity` |
 
 ---
 
@@ -152,7 +152,7 @@ The same video plays during idle/screensaver and on the lock screen.
 |---|---|---|
 | `wallpaperURL` | `URL?` | ✅ persisted via security-scoped bookmark |
 | `playbackMode` | `PlaybackMode` | ✅ |
-| `startAtLogin` | `Bool` | ⏳ v0.4 |
+| `startAtLogin` | `Bool` | ✅ `LoginItemManager` + `SMAppService` |
 | `batterySaverEnabled` | `Bool` | ✅ toggled via menu |
 | `pauseOnBattery` | `Bool` | ✅ `PowerModeMonitor` + `PlaybackCoordinator` |
 | `pauseWhenFullscreen` | `Bool` | ✅ `FullscreenAppMonitor` + `PlaybackCoordinator` |
@@ -267,7 +267,7 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 ├── FullscreenAppMonitor          ✅ FullscreenAppMonitor.swift
 │   └── NSWorkspace + CGWindowList
 │
-├── LoginItemManager              ⏳ v0.4
+├── LoginItemManager              ✅ LoginItemManager.swift
 │   └── launch at login
 │
 └── LiveWallScreenSaver           ⏳ v0.5
@@ -322,7 +322,7 @@ struct AppSettings: Codable {
 
 ```
 1. App launches in menu bar
-2. Welcome window appears        ← v0.4
+2. Settings are available from menu        ← v0.4
 3. User selects video wallpaper
 4. Wallpaper starts immediately
 ```
@@ -338,7 +338,7 @@ Current behaviour (v0.3): app launches silently in menu bar, restores last wallp
 | **v0.1** | menu bar, MP4, rendering, loop, pause/resume, quit | ✅ Done |
 | **v0.2** | multi-monitor, sleep/wake recovery, display changes, persistence | ✅ Done |
 | **v0.3** | battery saver, pause on battery/fullscreen/lock, performance metrics | ✅ Done |
-| **v0.4** | settings window, playback modes UI, launch at login | ⏳ Next |
+| **v0.4** | settings window, playback modes UI, launch at login | ✅ Done |
 | **v0.5** | screensaver extension — animated wallpaper on lock screen | ⏳ |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 

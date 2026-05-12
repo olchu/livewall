@@ -1,12 +1,21 @@
 import AppKit
+import Combine
 
 final class WallpaperWindowManager: WallpaperWindowManaging {
     private var windows: [NSWindow] = []
     private var views: [VideoWallpaperView] = []
     private let settings: SettingsStore
+    private var settingsCancellable: AnyCancellable?
 
     init(settings: SettingsStore = .shared) {
         self.settings = settings
+        settingsCancellable = settings.$settings
+            .map(\.playbackMode)
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                self?.setPlaybackMode(mode)
+            }
     }
 
     func setupWallpaperWindows() {
@@ -19,6 +28,7 @@ final class WallpaperWindowManager: WallpaperWindowManaging {
             if let url = settings.settings.wallpaperURL {
                 view.loadVideo(url: url)
             }
+            view.setGravity(settings.settings.playbackMode)
             window.orderFront(nil)
             windows.append(window)
             views.append(view)
@@ -33,7 +43,10 @@ final class WallpaperWindowManager: WallpaperWindowManaging {
 
     func reloadWallpaper() {
         guard let url = settings.settings.wallpaperURL else { return }
-        views.forEach { $0.loadVideo(url: url) }
+        views.forEach {
+            $0.loadVideo(url: url)
+            $0.setGravity(settings.settings.playbackMode)
+        }
     }
 
     func pause() {
@@ -46,5 +59,9 @@ final class WallpaperWindowManager: WallpaperWindowManaging {
 
     func handleDisplayChange() {
         setupWallpaperWindows()
+    }
+
+    private func setPlaybackMode(_ mode: PlaybackMode) {
+        views.forEach { $0.setGravity(mode) }
     }
 }

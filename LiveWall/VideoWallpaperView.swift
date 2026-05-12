@@ -69,7 +69,7 @@ final class VideoWallpaperView: NSView, VideoPlayback {
         switch mode {
         case .fill:   playerLayer?.videoGravity = .resizeAspectFill
         case .fit:    playerLayer?.videoGravity = .resizeAspect
-        case .center: playerLayer?.videoGravity = .resizeAspect
+        case .center: playerLayer?.videoGravity = .resize
         }
     }
 

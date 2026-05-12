@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wallpaperManager = manager
         playbackCoordinator = coordinator
         menuBarController = MenuBarController(manager: manager, coordinator: coordinator)
+        LoginItemManager.shared.syncSettingsState(settings)
 
         if let url = settings.resolveAndStartAccessingWallpaper() {
             DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
