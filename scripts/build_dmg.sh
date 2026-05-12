@@ -11,6 +11,7 @@ BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$BUILD_DIR/DerivedData}"
 DIST_DIR="${DIST_DIR:-$BUILD_DIR/dist}"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
+SIGNING_ARGS=()
 
 case "$SIGNING" in
     local)
@@ -21,7 +22,6 @@ case "$SIGNING" in
         )
         ;;
     automatic)
-        SIGNING_ARGS=()
         ;;
     none)
         SIGNING_ARGS=(CODE_SIGNING_ALLOWED=NO)
@@ -34,13 +34,18 @@ case "$SIGNING" in
 esac
 
 echo "Building $APP_NAME ($CONFIGURATION, signing: $SIGNING)..."
-xcodebuild \
-    -project "$PROJECT_PATH" \
-    -scheme "$SCHEME" \
-    -configuration "$CONFIGURATION" \
-    -derivedDataPath "$DERIVED_DATA_PATH" \
-    "${SIGNING_ARGS[@]}" \
-    build
+BUILD_COMMAND=(
+    xcodebuild
+    -project "$PROJECT_PATH"
+    -scheme "$SCHEME"
+    -configuration "$CONFIGURATION"
+    -derivedDataPath "$DERIVED_DATA_PATH"
+)
+if [[ ${#SIGNING_ARGS[@]} -gt 0 ]]; then
+    BUILD_COMMAND+=("${SIGNING_ARGS[@]}")
+fi
+BUILD_COMMAND+=(build)
+"${BUILD_COMMAND[@]}"
 
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$APP_NAME.app"
 if [[ ! -d "$APP_PATH" ]]; then
