@@ -362,6 +362,11 @@ Entitlements:          LiveWall/LiveWall.entitlements
   com.apple.security.files.user-selected.read-write: YES
 ```
 
+Distribution:
+- ✅ DMG installer: `scripts/build_dmg.sh`
+- ✅ default local signing: ad-hoc `CODE_SIGN_IDENTITY=-` with app entitlements
+- ⏳ public distribution: Developer ID signing + notarization
+
 ---
 
 ## 14. Future Ideas (Post v1.0)
