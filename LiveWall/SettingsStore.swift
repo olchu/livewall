@@ -9,8 +9,11 @@ final class SettingsStore: ObservableObject {
     }
 
     private let defaults = UserDefaults.standard
+    private let sharedDefaults = UserDefaults(suiteName: "group.com.ochurkin.LiveWall")
     private let settingsKey = "com.ochurkin.LiveWall.settings"
     private let bookmarkKey = "com.ochurkin.LiveWall.wallpaperBookmark"
+    private let sharedWallpaperBookmarkKey = "com.ochurkin.LiveWall.sharedWallpaperBookmark"
+    private let sharedWallpaperPathKey = "com.ochurkin.LiveWall.sharedWallpaperPath"
 
     // Active security-scoped access token — must be stopped before app quits
     private var accessingURL: URL?
@@ -33,13 +36,15 @@ final class SettingsStore: ObservableObject {
         settings.wallpaperURL = url
         accessingURL = url
         _ = url.startAccessingSecurityScopedResource()
-        if let bookmark = try? url.bookmarkData(
+        let bookmark = try? url.bookmarkData(
             options: .withSecurityScope,
             includingResourceValuesForKeys: nil,
             relativeTo: nil
-        ) {
+        )
+        if let bookmark {
             defaults.set(bookmark, forKey: bookmarkKey)
         }
+        publishSharedWallpaperURL(url, bookmark: bookmark)
     }
 
     /// Resolves the stored bookmark and begins access. Call on app launch.
@@ -57,6 +62,7 @@ final class SettingsStore: ObservableObject {
         if stale {
             // Bookmark went stale (file moved/renamed) — clear it
             defaults.removeObject(forKey: bookmarkKey)
+            clearSharedWallpaperURL()
             settings.wallpaperURL = nil
             return nil
         }
@@ -64,6 +70,7 @@ final class SettingsStore: ObservableObject {
         _ = url.startAccessingSecurityScopedResource()
         accessingURL = url
         settings.wallpaperURL = url
+        publishSharedWallpaperURL(url, bookmark: data)
         return url
     }
 
@@ -78,5 +85,17 @@ final class SettingsStore: ObservableObject {
         if let data = try? JSONEncoder().encode(settings) {
             defaults.set(data, forKey: settingsKey)
         }
+    }
+
+    private func publishSharedWallpaperURL(_ url: URL, bookmark: Data?) {
+        if let bookmark {
+            sharedDefaults?.set(bookmark, forKey: sharedWallpaperBookmarkKey)
+        }
+        sharedDefaults?.set(url.path, forKey: sharedWallpaperPathKey)
+    }
+
+    private func clearSharedWallpaperURL() {
+        sharedDefaults?.removeObject(forKey: sharedWallpaperBookmarkKey)
+        sharedDefaults?.removeObject(forKey: sharedWallpaperPathKey)
     }
 }

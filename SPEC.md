@@ -119,11 +119,11 @@ To show animated wallpaper during lock, a `ScreenSaver` extension (`.saver` bund
 
 | Requirement | Status |
 |---|---|
-| `.saver` bundle target in Xcode | ⏳ |
-| `ScreenSaverView` subclass playing `AVPlayer` | ⏳ |
-| Shared `UserDefaults` via App Group to read `wallpaperURL` | ⏳ |
-| App Group entitlement in both targets | ⏳ |
-| Muted, looping playback matching main app behavior | ⏳ |
+| `.saver` bundle target in Xcode | ✅ `LiveWallScreenSaver` target |
+| `ScreenSaverView` subclass playing `AVPlayer` | ✅ `LiveWallScreenSaverView` |
+| Shared `UserDefaults` via App Group to read `wallpaperURL` | ✅ shared security-scoped bookmark + path fallback |
+| App Group entitlement in both targets | ✅ `group.com.ochurkin.LiveWall` |
+| Muted, looping playback matching main app behavior | ✅ muted `AVPlayer` + loop observer |
 
 App Group ID: `group.com.ochurkin.LiveWall`
 
@@ -271,10 +271,10 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 │   └── launch at login
 │
 └── LiveWallScreenSaver           ⏳ v0.5
-    ├── .saver bundle target
-    ├── ScreenSaverView subclass
-    ├── AVPlayer (muted, looping)
-    └── reads wallpaperURL via App Group UserDefaults
+    ├── .saver bundle target      ✅ LiveWallScreenSaver
+    ├── ScreenSaverView subclass  ✅ LiveWallScreenSaverView
+    ├── AVPlayer (muted, looping) ✅
+    └── reads wallpaperURL via App Group UserDefaults ✅
 ```
 
 ---

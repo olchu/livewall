@@ -3,10 +3,18 @@ import AVFoundation
 
 enum DesktopWallpaperSync {
     private static let previewsDirectoryName = "DesktopPreviews"
+    private static let cachedPreviewVideoPathKey = "com.ochurkin.LiveWall.cachedPreviewVideoPath"
+    private static let cachedPreviewImagePathKey = "com.ochurkin.LiveWall.cachedPreviewImagePath"
     private static var syncTask: Task<Void, Never>?
 
     static func syncDesktopPicture(withVideoAt videoURL: URL) {
         syncTask?.cancel()
+
+        let videoPath = cachePath(for: videoURL)
+        if let cachedPreviewURL = cachedPreviewImageURL(forVideoPath: videoPath) {
+            applyDesktopImage(cachedPreviewURL)
+        }
+
         syncTask = Task {
             guard let imageURL = await makePreviewImage(from: videoURL) else { return }
 
@@ -23,7 +31,14 @@ enum DesktopWallpaperSync {
 
             guard !Task.isCancelled else { return }
 
+            cachePreviewImageURL(imageURL, forVideoPath: videoPath)
             cleanupOldPreviewImages(keeping: imageURL)
+        }
+    }
+
+    private static func applyDesktopImage(_ imageURL: URL) {
+        for screen in NSScreen.screens {
+            try? NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: [:])
         }
     }
 
@@ -66,6 +81,33 @@ enum DesktopWallpaperSync {
         } catch {
             return nil
         }
+    }
+
+    private static func cachePath(for url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private static func cachedPreviewImageURL(forVideoPath videoPath: String) -> URL? {
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: cachedPreviewVideoPathKey) == videoPath,
+              let imagePath = defaults.string(forKey: cachedPreviewImagePathKey) else {
+            return nil
+        }
+
+        let imageURL = URL(fileURLWithPath: imagePath)
+        guard FileManager.default.fileExists(atPath: imageURL.path) else {
+            defaults.removeObject(forKey: cachedPreviewVideoPathKey)
+            defaults.removeObject(forKey: cachedPreviewImagePathKey)
+            return nil
+        }
+
+        return imageURL
+    }
+
+    private static func cachePreviewImageURL(_ imageURL: URL, forVideoPath videoPath: String) {
+        let defaults = UserDefaults.standard
+        defaults.set(videoPath, forKey: cachedPreviewVideoPathKey)
+        defaults.set(imageURL.path, forKey: cachedPreviewImagePathKey)
     }
 
     private static func previewImageURL() throws -> URL {
