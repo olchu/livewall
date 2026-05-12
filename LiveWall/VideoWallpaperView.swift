@@ -6,9 +6,24 @@ final class VideoWallpaperView: NSView, VideoPlayback {
     private var playerLayer: AVPlayerLayer?
     private var loopObserver: Any?
 
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        // Set up layer backing once — avoids layout recursion if loadVideo is called during layout
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+    }
+
     override func layout() {
         super.layout()
-        playerLayer?.frame = bounds
+        guard let layer = playerLayer, layer.frame != bounds else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = bounds
+        CATransaction.commit()
     }
 
     func loadVideo(url: URL) {
@@ -18,11 +33,13 @@ final class VideoWallpaperView: NSView, VideoPlayback {
         let player = AVPlayer(playerItem: item)
         player.isMuted = true
         player.actionAtItemEnd = .none
+        player.allowsExternalPlayback = false
+        player.preventsDisplaySleepDuringVideoPlayback = false
 
         let layer = AVPlayerLayer(player: player)
         layer.frame = bounds
         layer.videoGravity = .resizeAspectFill
-        wantsLayer = true
+        layer.drawsAsynchronously = true
         self.layer?.addSublayer(layer)
 
         loopObserver = NotificationCenter.default.addObserver(
@@ -30,7 +47,7 @@ final class VideoWallpaperView: NSView, VideoPlayback {
             object: item,
             queue: .main
         ) { [weak player] _ in
-            player?.seek(to: .zero)
+            player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             player?.play()
         }
 

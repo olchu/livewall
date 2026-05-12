@@ -1,20 +1,21 @@
 import AppKit
 
-final class WallpaperWindow: NSWindow {
-    init(screen: NSScreen) {
-        super.init(
+extension NSWindow {
+    static func makeWallpaperWindow(screen: NSScreen) -> NSWindow {
+        let window = NSWindow(
             contentRect: screen.frame,
             styleMask: .borderless,
             backing: .buffered,
             defer: false
         )
         // Place window at the desktop layer — below Finder icons, above desktop background
-        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
-        isOpaque = false
-        backgroundColor = .clear
-        ignoresMouseEvents = true
+        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.ignoresMouseEvents = true
         // Appear on every Space without being cycled or shown in Mission Control
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        isReleasedWhenClosed = false
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.isReleasedWhenClosed = false
+        return window
     }
 }

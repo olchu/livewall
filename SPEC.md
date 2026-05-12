@@ -39,11 +39,22 @@ LiveWall Lite
 ────────────────
 Select Wallpaper...    ✅
 Pause / Resume         ✅
+────────────────
+CPU:  3.2%             ⏳ v0.3
+RAM:  87 MB            ⏳ v0.3
+GPU:  ~45 MB           ⏳ v0.3
+────────────────
 Battery Saver: On/Off  ⏳ v0.3
 Start at Login: On/Off ⏳ v0.4
 Settings...            ⏳ v0.4
 Quit                   ✅
 ```
+
+Performance metrics notes:
+- CPU — per-process, via `mach` `task_threads` + `thread_basic_info`
+- RAM — per-process physical footprint, via `task_vm_info` (`phys_footprint`)
+- GPU — `MTLDevice.currentAllocatedSize` (device-wide, not per-process; sandbox limitation)
+- Metrics update only when menu is open (`NSMenuDelegate`) — no background polling
 
 Requirements:
 - ✅ no Dock icon (`LSUIElement = YES` + `.accessory` activation policy)

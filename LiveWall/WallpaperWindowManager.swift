@@ -1,7 +1,7 @@
 import AppKit
 
 final class WallpaperWindowManager: WallpaperWindowManaging {
-    private var windows: [WallpaperWindow] = []
+    private var windows: [NSWindow] = []
     private var views: [VideoWallpaperView] = []
     private let settings: SettingsStore
 
@@ -12,7 +12,7 @@ final class WallpaperWindowManager: WallpaperWindowManaging {
     func setupWallpaperWindows() {
         destroyWallpaperWindows()
         for screen in NSScreen.screens {
-            let window = WallpaperWindow(screen: screen)
+            let window = NSWindow.makeWallpaperWindow(screen: screen)
             let view = VideoWallpaperView(frame: screen.frame)
             window.contentView = view
             if let url = settings.settings.wallpaperURL {

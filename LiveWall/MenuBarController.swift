@@ -1,16 +1,22 @@
 import AppKit
 import UniformTypeIdentifiers
 
-final class MenuBarController {
+final class MenuBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private weak var manager: WallpaperWindowManaging?
     private let settings: SettingsStore
+    private let performance = PerformanceMonitor()
     private var isPaused = false
+
     private weak var pauseMenuItem: NSMenuItem?
+    private weak var cpuMenuItem: NSMenuItem?
+    private weak var ramMenuItem: NSMenuItem?
+    private weak var gpuMenuItem: NSMenuItem?
 
     init(manager: WallpaperWindowManaging, settings: SettingsStore = .shared) {
         self.manager = manager
         self.settings = settings
+        super.init()
         setupStatusItem()
     }
 
@@ -18,7 +24,9 @@ final class MenuBarController {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem?.button?.image = NSImage(systemSymbolName: "play.rectangle.fill",
                                             accessibilityDescription: "LiveWall")
-        statusItem?.menu = buildMenu()
+        let menu = buildMenu()
+        menu.delegate = self
+        statusItem?.menu = menu
     }
 
     private func buildMenu() -> NSMenu {
@@ -36,12 +44,56 @@ final class MenuBarController {
         pauseMenuItem = pauseItem
         menu.addItem(pauseItem)
 
+        // Performance section
+        menu.addItem(.separator())
+        let cpuItem = makeStatItem("CPU:  —")
+        let ramItem = makeStatItem("RAM:  —")
+        let gpuItem = makeStatItem("GPU:  — (device)")
+        cpuMenuItem = cpuItem
+        ramMenuItem = ramItem
+        gpuMenuItem = gpuItem
+        menu.addItem(cpuItem)
+        menu.addItem(ramItem)
+        menu.addItem(gpuItem)
+
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit LiveWall",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         return menu
     }
+
+    private func makeStatItem(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+                         .foregroundColor: NSColor.secondaryLabelColor]
+        )
+        return item
+    }
+
+    // MARK: - NSMenuDelegate
+
+    func menuWillOpen(_ menu: NSMenu) {
+        let snap = performance.snapshot()
+        updateStat(cpuMenuItem, label: "CPU", value: snap.cpuFormatted)
+        updateStat(ramMenuItem, label: "RAM", value: snap.ramFormatted)
+        updateStat(gpuMenuItem, label: "GPU", value: "\(snap.gpuFormatted) (device)")
+    }
+
+    private func updateStat(_ item: NSMenuItem?, label: String, value: String) {
+        guard let item else { return }
+        let text = String(format: "%-4@ %@", label + ":", value)
+        item.attributedTitle = NSAttributedString(
+            string: text,
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+                         .foregroundColor: NSColor.secondaryLabelColor]
+        )
+    }
+
+    // MARK: - Actions
 
     @objc private func selectWallpaper() {
         let panel = NSOpenPanel()

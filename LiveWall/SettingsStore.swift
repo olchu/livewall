@@ -27,17 +27,19 @@ final class SettingsStore: ObservableObject {
     // MARK: - Bookmark-based file access
 
     /// Persists a user-picked URL as a security-scoped bookmark and begins access.
+    /// URL is always set immediately; bookmark is best-effort for persistence across restarts.
     func setWallpaperURL(_ url: URL) {
         stopAccessingWallpaper()
-        guard let bookmark = try? url.bookmarkData(
+        settings.wallpaperURL = url
+        accessingURL = url
+        _ = url.startAccessingSecurityScopedResource()
+        if let bookmark = try? url.bookmarkData(
             options: .withSecurityScope,
             includingResourceValuesForKeys: nil,
             relativeTo: nil
-        ) else { return }
-        defaults.set(bookmark, forKey: bookmarkKey)
-        settings.wallpaperURL = url
-        _ = url.startAccessingSecurityScopedResource()
-        accessingURL = url
+        ) {
+            defaults.set(bookmark, forKey: bookmarkKey)
+        }
     }
 
     /// Resolves the stored bookmark and begins access. Call on app launch.
