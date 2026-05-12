@@ -6,6 +6,34 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B10000000000000000000010 /* LiveWallScreenSaver.saver in Embed Screen Saver */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LiveWallScreenSaver.saver */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B10000000000000000000012 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A5966B502FB34AC400ACC0DC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B10000000000000000000003;
+			remoteInfo = LiveWallScreenSaver;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B10000000000000000000011 /* Embed Screen Saver */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B10000000000000000000010 /* LiveWallScreenSaver.saver in Embed Screen Saver */,
+			);
+			name = "Embed Screen Saver";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		A5966B582FB34AC400ACC0DC /* LiveWall.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LiveWall.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000001 /* LiveWallScreenSaver.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LiveWallScreenSaver.saver; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -70,10 +98,12 @@
 				A5966B542FB34AC400ACC0DC /* Sources */,
 				A5966B552FB34AC400ACC0DC /* Frameworks */,
 				A5966B562FB34AC400ACC0DC /* Resources */,
+				B10000000000000000000011 /* Embed Screen Saver */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B10000000000000000000013 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A5966B5A2FB34AC400ACC0DC /* LiveWall */,
@@ -174,6 +204,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B10000000000000000000013 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B10000000000000000000003 /* LiveWallScreenSaver */;
+			targetProxy = B10000000000000000000012 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A5966B612FB34AC500ACC0DC /* Debug */ = {

@@ -51,6 +51,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Reveal Optimized Videos",
                                 action: #selector(revealOptimizedVideos),
                                 keyEquivalent: "").then { $0.target = self })
+        menu.addItem(NSMenuItem(title: "Install Screen Saver…",
+                                action: #selector(installScreenSaver),
+                                keyEquivalent: "").then { $0.target = self })
         menu.addItem(.separator())
 
         // Pause / Resume
@@ -258,6 +261,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         } catch {
             let alert = NSAlert(error: error)
             alert.messageText = "Could not open optimized videos folder"
+            alert.runModal()
+        }
+    }
+
+    @objc private func installScreenSaver() {
+        do {
+            let url = try ScreenSaverInstaller.installBundledScreenSaver()
+            let alert = NSAlert()
+            alert.messageText = "LiveWall Screen Saver Installed"
+            alert.informativeText = "Choose LiveWallScreenSaver in System Settings → Screen Saver to use the animated wallpaper while the screen saver is active."
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Reveal")
+
+            if alert.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Could not install LiveWall Screen Saver"
             alert.runModal()
         }
     }
