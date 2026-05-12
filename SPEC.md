@@ -90,6 +90,12 @@ GIF: ❌ not used.
 | stays behind Finder | ✅ |
 | survive sleep/wake | ✅ `SystemEventMonitor` → `PlaybackCoordinator.handleWake()` |
 | multiple monitors | ✅ `WallpaperWindowManager` iterates `NSScreen.screens` |
+| menu bar contrast sync | ✅ first video frame saved as desktop picture via `DesktopWallpaperSync` |
+
+macOS chooses menu bar text color and top-bar material from the system desktop picture,
+not from the custom desktop-level video window. When a video wallpaper is selected or
+restored, LiveWall extracts a still frame and sets it as the real desktop picture first,
+then renders the animated wallpaper above it.
 
 ---
 
@@ -200,6 +206,11 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 │   ├── AVPlayerLayer
 │   └── loop handling
 │
+├── DesktopWallpaperSync          ✅ DesktopWallpaperSync.swift
+│   ├── extracts preview frame with AVAssetImageGenerator
+│   ├── stores cached JPG in Application Support
+│   └── sets NSWorkspace desktop picture for menu bar contrast
+│
 ├── PerformanceMonitor            ✅ PerformanceMonitor.swift
 │   ├── CPU (per-process, mach task_threads)
 │   ├── RAM (phys_footprint)
@@ -304,6 +315,8 @@ audio wallpapers · Windows support · web wallpapers · animated HTML
 | Multiple monitor sync | per-screen `NSWindow` instances |
 | Sandbox file access | ✅ security-scoped bookmarks (`SettingsStore`) + `user-selected.read-write` entitlement |
 | Fullscreen detection without SR permission | `FullscreenAppMonitor` returns `false` — no false positives |
+| Menu bar contrast mismatch | `DesktopWallpaperSync` sets first video frame as real desktop picture before video overlay |
+| Per-Space desktop pictures | Current Space sync is supported; other Spaces may keep their own desktop picture until activated/resynced |
 
 ---
 
