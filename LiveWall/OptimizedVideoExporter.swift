@@ -2,11 +2,17 @@ import AVFoundation
 import Foundation
 
 enum OptimizedVideoExporter {
+    struct ExportResult {
+        let url: URL
+        let reusedExistingCopy: Bool
+    }
+
     enum ExportError: LocalizedError {
         case noCompatiblePreset
         case cannotCreateSession
         case noSupportedOutputType
         case exportFailed
+        case cannotReadSourceMetadata
 
         var errorDescription: String? {
             switch self {
@@ -18,11 +24,22 @@ enum OptimizedVideoExporter {
                 return "No supported output file type was found for this video."
             case .exportFailed:
                 return "The video export did not complete."
+            case .cannotReadSourceMetadata:
+                return "Could not read the selected video's file metadata."
             }
         }
     }
 
     static func exportOptimizedCopy(from sourceURL: URL) async throws -> URL {
+        try await optimizedCopy(from: sourceURL).url
+    }
+
+    static func optimizedCopy(from sourceURL: URL) async throws -> ExportResult {
+        let fingerprint = try sourceFingerprint(for: sourceURL)
+        if let cachedURL = try cachedOptimizedCopy(for: fingerprint) {
+            return ExportResult(url: cachedURL, reusedExistingCopy: true)
+        }
+
         let asset = AVURLAsset(url: sourceURL)
         guard let preset = await preferredPreset(for: asset) else {
             throw ExportError.noCompatiblePreset
@@ -42,7 +59,8 @@ enum OptimizedVideoExporter {
         session.shouldOptimizeForNetworkUse = false
 
         try await session.export(to: outputURL, as: outputType)
-        return outputURL
+        try cacheOptimizedCopy(outputURL, for: fingerprint)
+        return ExportResult(url: outputURL, reusedExistingCopy: false)
     }
 
     static func optimizedWallpapersDirectory(create: Bool = true) throws -> URL {
@@ -96,6 +114,50 @@ enum OptimizedVideoExporter {
     private static func makeOutputURL(fileExtension: String) throws -> URL {
         let directory = try optimizedWallpapersDirectory()
         return directory.appendingPathComponent("wallpaper-\(UUID().uuidString).\(fileExtension)")
+    }
+
+    private static func sourceFingerprint(for sourceURL: URL) throws -> String {
+        let values = try sourceURL.resourceValues(forKeys: [.fileSizeKey])
+        guard let fileSize = values.fileSize else {
+            throw ExportError.cannotReadSourceMetadata
+        }
+        return "\(sourceURL.lastPathComponent)|\(fileSize)"
+    }
+
+    private static func cachedOptimizedCopy(for fingerprint: String) throws -> URL? {
+        var index = try loadIndex()
+        guard let path = index[fingerprint] else { return nil }
+
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            index.removeValue(forKey: fingerprint)
+            try saveIndex(index)
+            return nil
+        }
+
+        return url
+    }
+
+    private static func cacheOptimizedCopy(_ url: URL, for fingerprint: String) throws {
+        var index = try loadIndex()
+        index[fingerprint] = url.path
+        try saveIndex(index)
+    }
+
+    private static func loadIndex() throws -> [String: String] {
+        let url = try indexURL()
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+    }
+
+    private static func saveIndex(_ index: [String: String]) throws {
+        let data = try JSONEncoder().encode(index)
+        try data.write(to: try indexURL(), options: .atomic)
+    }
+
+    private static func indexURL() throws -> URL {
+        try optimizedWallpapersDirectory()
+            .appendingPathComponent("optimized-index.json")
     }
 
 }

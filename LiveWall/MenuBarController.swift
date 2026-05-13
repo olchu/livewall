@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 import UserNotifications
 import UniformTypeIdentifiers
 
@@ -35,11 +34,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem?.button?.image = NSImage(systemSymbolName: "play.rectangle.fill",
-                                            accessibilityDescription: "LiveWall")
+        statusItem?.button?.image = makeStatusIcon()
         let menu = buildMenu()
         menu.delegate = self
         statusItem?.menu = menu
+    }
+
+    private func makeStatusIcon() -> NSImage? {
+        let image = NSImage(named: "statusbar")
+            ?? NSImage(named: "StatusBarIcon")
+            ?? NSImage(systemSymbolName: "play.rectangle.fill", accessibilityDescription: "LiveWall")
+        image?.isTemplate = true
+        image?.size = NSSize(width: 18, height: 18)
+        image?.accessibilityDescription = "LiveWall"
+        return image
     }
 
     private func buildMenu() -> NSMenu {
@@ -113,10 +121,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func makeSettingsMenuItem() -> NSMenuItem {
-        let item = NSMenuItem()
-        let hostingView = NSHostingView(rootView: SettingsMenuItemView())
-        hostingView.frame = NSRect(x: 0, y: 0, width: 220, height: 24)
-        item.view = hostingView
+        let item = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        item.target = self
         return item
     }
 
@@ -206,15 +212,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                         sourceURL.stopAccessingSecurityScopedResource()
                     }
                 }
-                let optimizedURL = try await OptimizedVideoExporter.exportOptimizedCopy(from: sourceURL)
-                self.applyWallpaper(optimizedURL)
-                self.notifyOptimizationSuccess(optimizedURL)
+                let result = try await OptimizedVideoExporter.optimizedCopy(from: sourceURL)
+                self.applyWallpaper(result.url)
+                if !result.reusedExistingCopy {
+                    self.notifyOptimizationSuccess(result.url)
+                }
             } catch {
                 self.applyWallpaper(sourceURL)
                 self.showOptimizationError(error, fallbackURL: sourceURL)
             }
-            self.statusItem?.button?.image = NSImage(systemSymbolName: "play.rectangle.fill",
-                                                     accessibilityDescription: "LiveWall")
+            self.statusItem?.button?.image = self.makeStatusIcon()
         }
     }
 
@@ -284,6 +291,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func openSettings() {
+        SettingsWindowPresenter.openSettings()
+    }
+
     @objc private func togglePause() {
         coordinator?.toggleUserPause()
         pauseMenuItem?.title = coordinator?.isUserPaused == true ? "Resume" : "Pause"
@@ -319,26 +330,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-}
-
-private struct SettingsMenuItemView: View {
-    var body: some View {
-        SettingsLink {
-            HStack(spacing: 8) {
-                Text("Settings...")
-                Spacer()
-                Text("⌘,")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 192, height: 24)
-            .padding(.horizontal, 14)
-            .contentShape(Rectangle())
-        }
-        .simultaneousGesture(TapGesture().onEnded {
-            SettingsWindowPresenter.prepareToOpenSettings()
-        })
-        .buttonStyle(.plain)
-    }
 }
 
 // MARK: - NSMenuItem builder helper
