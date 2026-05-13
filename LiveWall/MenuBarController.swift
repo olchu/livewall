@@ -79,6 +79,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         startAtLoginItem = addToggle(to: menu, title: "Start at Login", action: #selector(toggleStartAtLogin), state: settings.settings.startAtLogin)
+        menu.addItem(.separator())
         menu.addItem(makeSettingsMenuItem())
 
         menu.addItem(.separator())
