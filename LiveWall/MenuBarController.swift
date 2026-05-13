@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import UserNotifications
 import UniformTypeIdentifiers
 
@@ -17,6 +18,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private weak var cpuMenuItem: NSMenuItem?
     private weak var ramMenuItem: NSMenuItem?
     private weak var gpuMenuItem: NSMenuItem?
+    private weak var previewView: WallpaperPreviewView?
+    private var thumbnailTask: Task<Void, Never>?
     private var optimizationTask: Task<Void, Never>?
     private let notificationCenter = UNUserNotificationCenter.current()
     private let loginItemManager = LoginItemManager.shared
@@ -53,14 +56,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func buildMenu() -> NSMenu {
         let menu = NSMenu(title: "LiveWall Lite")
 
+        // Wallpaper preview
+        let pv = WallpaperPreviewView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
+        previewView = pv
+        let previewItem = NSMenuItem()
+        previewItem.view = pv
+        menu.addItem(previewItem)
+
+        // Version below preview
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        menu.addItem(NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "").then {
+            $0.isEnabled = false
+            $0.attributedTitle = NSAttributedString(
+                string: "Version \(version)",
+                attributes: [.foregroundColor: NSColor.secondaryLabelColor,
+                             .font: NSFont.systemFont(ofSize: 12)]
+            )
+        })
+        menu.addItem(.separator())
+
         menu.addItem(NSMenuItem(title: "Select Wallpaper…",
                                 action: #selector(selectWallpaper),
-                                keyEquivalent: "").then { $0.target = self })
-        menu.addItem(NSMenuItem(title: "Reveal Optimized Videos",
-                                action: #selector(revealOptimizedVideos),
-                                keyEquivalent: "").then { $0.target = self })
-        menu.addItem(NSMenuItem(title: "Install Screen Saver…",
-                                action: #selector(installScreenSaver),
                                 keyEquivalent: "").then { $0.target = self })
         menu.addItem(.separator())
 
@@ -130,7 +146,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
-        // Sync toggle states in case they changed programmatically
         pauseOnBatteryItem?.state    = settings.settings.pauseOnBattery      ? .on : .off
         pauseOnFullscreenItem?.state = settings.settings.pauseWhenFullscreen  ? .on : .off
         pauseOnLockItem?.state       = settings.settings.pauseWhenLocked      ? .on : .off
@@ -140,6 +155,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         updateStat(cpuMenuItem, label: "CPU", value: snap.cpuFormatted)
         updateStat(ramMenuItem, label: "RAM", value: snap.ramFormatted)
         updateStat(gpuMenuItem, label: "GPU", value: "\(snap.gpuFormatted) (device)")
+
+        updateThumbnail()
     }
 
     private func updateStat(_ item: NSMenuItem?, label: String, value: String) {
@@ -150,6 +167,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
                          .foregroundColor: NSColor.secondaryLabelColor]
         )
+    }
+
+    private func updateThumbnail() {
+        thumbnailTask?.cancel()
+        guard let url = settings.settings.wallpaperURL else {
+            previewView?.update(image: nil)
+            return
+        }
+        thumbnailTask = Task { [weak self] in
+            let asset = AVURLAsset(url: url)
+            let gen = AVAssetImageGenerator(asset: asset)
+            gen.appliesPreferredTrackTransform = true
+            gen.maximumSize = CGSize(width: 600, height: 300)
+            guard let cgImage = try? await gen.image(at: .zero).image,
+                  !Task.isCancelled else { return }
+            let img = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            await MainActor.run {
+                self?.previewView?.update(image: img)
+            }
+        }
     }
 
     // MARK: - Actions
@@ -262,36 +299,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc private func revealOptimizedVideos() {
-        do {
-            let directory = try OptimizedVideoExporter.optimizedWallpapersDirectory()
-            NSWorkspace.shared.open(directory)
-        } catch {
-            let alert = NSAlert(error: error)
-            alert.messageText = "Could not open optimized videos folder"
-            alert.runModal()
-        }
-    }
-
-    @objc private func installScreenSaver() {
-        do {
-            let url = try ScreenSaverInstaller.installBundledScreenSaver()
-            let alert = NSAlert()
-            alert.messageText = "LiveWall Screen Saver Installed"
-            alert.informativeText = "Choose LiveWallScreenSaver in System Settings → Screen Saver to use the animated wallpaper while the screen saver is active."
-            alert.addButton(withTitle: "OK")
-            alert.addButton(withTitle: "Reveal")
-
-            if alert.runModal() == .alertSecondButtonReturn {
-                NSWorkspace.shared.activateFileViewerSelecting([url])
-            }
-        } catch {
-            let alert = NSAlert(error: error)
-            alert.messageText = "Could not install LiveWall Screen Saver"
-            alert.runModal()
-        }
-    }
-
     @objc private func openSettings() {
         SettingsWindowPresenter.openSettings()
     }
@@ -331,6 +338,38 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+}
+
+// MARK: - Wallpaper preview thumbnail in menu
+
+private final class WallpaperPreviewView: NSView {
+    private let imageLayer = CALayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+        imageLayer.contentsGravity = .resizeAspectFill
+        imageLayer.masksToBounds = true
+        layer?.addSublayer(imageLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(image: NSImage?) {
+        imageLayer.contents = image
+        layer?.backgroundColor = image == nil
+            ? NSColor.quaternaryLabelColor.cgColor
+            : nil
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.frame = bounds
+        CATransaction.commit()
+    }
 }
 
 // MARK: - NSMenuItem builder helper

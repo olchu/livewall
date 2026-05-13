@@ -31,6 +31,11 @@ struct SettingsView: View {
             Section("System") {
                 Toggle("Start at Login", isOn: startAtLogin)
             }
+
+            Section("Tools") {
+                Button("Reveal Optimized Videos") { revealOptimizedVideos() }
+                Button("Install Screen Saver…") { installScreenSaver() }
+            }
         }
         .formStyle(.grouped)
         .padding(20)
@@ -76,6 +81,29 @@ struct SettingsView: View {
         alert.messageText = "Could not update Start at Login"
         alert.informativeText = error.localizedDescription
         alert.runModal()
+    }
+
+    private func revealOptimizedVideos() {
+        guard let dir = try? OptimizedVideoExporter.optimizedWallpapersDirectory() else { return }
+        NSWorkspace.shared.open(dir)
+    }
+
+    private func installScreenSaver() {
+        do {
+            let url = try ScreenSaverInstaller.installBundledScreenSaver()
+            let alert = NSAlert()
+            alert.messageText = "LiveWall Screen Saver Installed"
+            alert.informativeText = "Choose LiveWallScreenSaver in System Settings → Screen Saver."
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Reveal")
+            if alert.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Could not install LiveWall Screen Saver"
+            alert.runModal()
+        }
     }
 }
 
