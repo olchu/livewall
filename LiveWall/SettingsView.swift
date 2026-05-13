@@ -90,15 +90,7 @@ struct SettingsView: View {
 
     private func installScreenSaver() {
         do {
-            let url = try ScreenSaverInstaller.installBundledScreenSaver()
-            let alert = NSAlert()
-            alert.messageText = "LiveWall Screen Saver Installed"
-            alert.informativeText = "Choose LiveWallScreenSaver in System Settings → Screen Saver."
-            alert.addButton(withTitle: "OK")
-            alert.addButton(withTitle: "Reveal")
-            if alert.runModal() == .alertSecondButtonReturn {
-                NSWorkspace.shared.activateFileViewerSelecting([url])
-            }
+            try ScreenSaverInstaller.installBundledScreenSaver()
         } catch {
             let alert = NSAlert(error: error)
             alert.messageText = "Could not install LiveWall Screen Saver"

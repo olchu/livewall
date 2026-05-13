@@ -92,6 +92,36 @@ final class SettingsStore: ObservableObject {
             sharedDefaults?.set(bookmark, forKey: sharedWallpaperBookmarkKey)
         }
         sharedDefaults?.set(url.path, forKey: sharedWallpaperPathKey)
+        copyToGroupContainer(url)
+    }
+
+    // Copies the video into ~/Movies/LiveWall/ so the legacyScreenSaver process
+    // can read it via its container's Movies symlink (no entitlement needed there).
+    private func copyToGroupContainer(_ url: URL) {
+        let fm = FileManager.default
+        guard let moviesURL = fm.urls(for: .moviesDirectory, in: .userDomainMask).first else { return }
+        let liveWallDir = moviesURL.appendingPathComponent("LiveWall", isDirectory: true)
+
+        let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
+        let filename = "wallpaper.\(ext)"
+        let destURL = liveWallDir.appendingPathComponent(filename)
+
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                if !fm.fileExists(atPath: liveWallDir.path) {
+                    try fm.createDirectory(at: liveWallDir, withIntermediateDirectories: true)
+                }
+                // Remove any previous wallpaper files with other extensions
+                for oldExt in ["mp4", "mov", "m4v"] where oldExt != ext {
+                    let old = liveWallDir.appendingPathComponent("wallpaper.\(oldExt)")
+                    try? fm.removeItem(at: old)
+                }
+                try? fm.removeItem(at: destURL)
+                try fm.copyItem(at: url, to: destURL)
+            } catch {
+                // Best-effort: screensaver falls back to showing nothing
+            }
+        }
     }
 
     private func clearSharedWallpaperURL() {
