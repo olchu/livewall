@@ -5,6 +5,7 @@ final class VideoWallpaperView: NSView, VideoPlayback {
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
     private var loopObserver: Any?
+    private var playbackRequested = true
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -47,21 +48,27 @@ final class VideoWallpaperView: NSView, VideoPlayback {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
-        ) { [weak player] _ in
+        ) { [weak self, weak player] _ in
             player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-            player?.play()
+            if self?.playbackRequested == true {
+                player?.play()
+            }
         }
 
         self.player = player
         self.playerLayer = layer
-        player.play()
+        if playbackRequested {
+            player.play()
+        }
     }
 
     func play() {
+        playbackRequested = true
         player?.play()
     }
 
     func pause() {
+        playbackRequested = false
         player?.pause()
     }
 
