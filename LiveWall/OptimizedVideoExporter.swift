@@ -57,6 +57,13 @@ enum OptimizedVideoExporter {
         try? FileManager.default.removeItem(at: outputURL)
 
         session.shouldOptimizeForNetworkUse = false
+        // Cap to 30 fps: halves idle wake-ups and compositor CPU vs 60 fps sources.
+        // 30 fps is imperceptible for a desktop wallpaper.
+        let videoComposition = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: asset)
+        if CMTimeGetSeconds(videoComposition.frameDuration) < 1.0 / 30.0 {
+            videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+            session.videoComposition = videoComposition
+        }
 
         try await session.export(to: outputURL, as: outputType)
         try cacheOptimizedCopy(outputURL, for: fingerprint)
@@ -80,7 +87,10 @@ enum OptimizedVideoExporter {
     }
 
     private static func preferredPreset(for asset: AVAsset) async -> String? {
+        // HEVC presets use the dedicated Video Decode Engine on Apple Silicon/modern Intel,
+        // dropping CPU decode cost to near-zero vs H.264 which shares CPU resources.
         let preferredPresets = [
+            AVAssetExportPresetHEVC1920x1080,
             AVAssetExportPreset1920x1080,
             AVAssetExportPreset1280x720,
             AVAssetExportPresetMediumQuality,

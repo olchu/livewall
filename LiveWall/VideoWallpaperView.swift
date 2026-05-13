@@ -2,9 +2,9 @@ import AppKit
 import AVFoundation
 
 final class VideoWallpaperView: NSView, VideoPlayback {
-    private var player: AVPlayer?
+    private var queuePlayer: AVQueuePlayer?
+    private var playerLooper: AVPlayerLooper?
     private var playerLayer: AVPlayerLayer?
-    private var loopObserver: Any?
     private var playbackRequested = true
 
     override init(frame frameRect: NSRect) {
@@ -29,12 +29,16 @@ final class VideoWallpaperView: NSView, VideoPlayback {
     func loadVideo(url: URL) {
         cleanup()
 
-        let item = AVPlayerItem(url: url)
-        let player = AVPlayer(playerItem: item)
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
+
+        let player = AVQueuePlayer()
         player.isMuted = true
-        player.actionAtItemEnd = .none
         player.allowsExternalPlayback = false
         player.preventsDisplaySleepDuringVideoPlayback = false
+        player.automaticallyWaitsToMinimizeStalling = false
+
+        let looper = AVPlayerLooper(player: player, templateItem: item)
 
         let layer = AVPlayerLayer(player: player)
         layer.frame = bounds
@@ -44,19 +48,10 @@ final class VideoWallpaperView: NSView, VideoPlayback {
         wantsLayer = true
         self.layer?.addSublayer(layer)
 
-        loopObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { [weak self, weak player] _ in
-            player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-            if self?.playbackRequested == true {
-                player?.play()
-            }
-        }
-
-        self.player = player
+        self.queuePlayer = player
+        self.playerLooper = looper
         self.playerLayer = layer
+
         if playbackRequested {
             player.play()
         }
@@ -64,12 +59,12 @@ final class VideoWallpaperView: NSView, VideoPlayback {
 
     func play() {
         playbackRequested = true
-        player?.play()
+        queuePlayer?.play()
     }
 
     func pause() {
         playbackRequested = false
-        player?.pause()
+        queuePlayer?.pause()
     }
 
     func setGravity(_ mode: PlaybackMode) {
@@ -86,13 +81,11 @@ final class VideoWallpaperView: NSView, VideoPlayback {
     }
 
     private func cleanup() {
-        if let obs = loopObserver {
-            NotificationCenter.default.removeObserver(obs)
-            loopObserver = nil
-        }
+        playerLooper?.disableLooping()
+        playerLooper = nil
         playerLayer?.removeFromSuperlayer()
-        player?.pause()
-        player = nil
+        queuePlayer?.pause()
+        queuePlayer = nil
         playerLayer = nil
     }
 
