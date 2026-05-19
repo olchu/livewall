@@ -8,6 +8,8 @@ struct AppSettings: Codable {
     var pauseOnBattery: Bool
     var pauseWhenFullscreen: Bool
     var pauseWhenLocked: Bool
+    var crossfadeEnabled: Bool
+    var crossfadeDuration: Double
 
     static let `default` = AppSettings(
         wallpaperURL: nil,
@@ -16,6 +18,8 @@ struct AppSettings: Codable {
         batterySaverEnabled: false,
         pauseOnBattery: false,
         pauseWhenFullscreen: false,
-        pauseWhenLocked: false
+        pauseWhenLocked: false,
+        crossfadeEnabled: false,
+        crossfadeDuration: 1.5
     )
 }

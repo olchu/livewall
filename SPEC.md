@@ -136,11 +136,21 @@ The same video plays during idle/screensaver and on the lock screen.
 
 | Requirement | Status |
 |---|---|
-| infinite loop | ✅ `AVPlayerItemDidPlayToEndTime` observer |
+| infinite loop | ✅ `AVQueuePlayer` + `AVPlayerLooper` |
 | hardware accelerated decoding | ✅ `AVPlayerLayer` |
 | muted | ✅ `player.isMuted = true` |
 | pause/resume | ✅ |
 | display modes: Fill / Fit / Center | ✅ Settings UI updates `AVPlayerLayer.videoGravity` |
+| crossfade loop transition (smooth mix) | ✅ `VideoWallpaperView` dual-player mode |
+| crossfade duration: 0.5–5.0 s, clamped to ≤ 50% of video duration | ✅ Settings UI slider |
+| video duration detection (guard: transition safe) | ✅ `AVURLAsset.load(.duration)` async |
+
+**Crossfade implementation (v0.6):**  
+When enabled, `VideoWallpaperView` switches to dual-player mode instead of `AVPlayerLooper`.  
+Two `AVPlayer` + two `AVPlayerLayer` (layerA opacity=1, layerB opacity=0) play the same URL.  
+A boundary time observer on the active player fires at `currentDuration − crossfadeDuration`.  
+At that point: standby player seeks to 0 and plays; `CATransaction` animates opacity swap over `crossfadeDuration` seconds.  
+After transition completes: old active player pauses and seeks to 0; roles swap; new boundary observer is registered on the now-active player.
 
 ---
 
@@ -157,6 +167,8 @@ The same video plays during idle/screensaver and on the lock screen.
 | `pauseOnBattery` | `Bool` | ✅ `PowerModeMonitor` + `PlaybackCoordinator` |
 | `pauseWhenFullscreen` | `Bool` | ✅ `FullscreenAppMonitor` + `PlaybackCoordinator` |
 | `pauseWhenLocked` | `Bool` | ✅ `DistributedNotificationCenter` + `PlaybackCoordinator` |
+| `crossfadeEnabled` | `Bool` (default `false`) | ✅ |
+| `crossfadeDuration` | `Double` seconds (default `1.5`, range `0.5–5.0`) | ✅ |
 
 Persistence: ✅ `UserDefaults` via `SettingsStore`
 
@@ -236,9 +248,10 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 │   └── NSWindow factory extension (macOS 26 compat)
 │
 ├── VideoWallpaperView            ✅ VideoWallpaperView.swift
-│   ├── AVPlayer
-│   ├── AVPlayerLayer
-│   └── loop handling
+│   ├── looper mode: AVQueuePlayer + AVPlayerLooper (default)
+│   ├── crossfade mode: dual AVPlayer + dual AVPlayerLayer (v0.6)
+│   ├── boundary time observer → opacity swap via CATransaction
+│   └── setCrossfade(enabled:duration:) reloads into correct mode
 │
 ├── DesktopWallpaperSync          ✅ DesktopWallpaperSync.swift
 │   ├── extracts preview frame with AVAssetImageGenerator
@@ -340,6 +353,7 @@ Current behaviour (v0.3): app launches silently in menu bar, restores last wallp
 | **v0.3** | battery saver, pause on battery/fullscreen/lock, performance metrics | ✅ Done |
 | **v0.4** | settings window, playback modes UI, launch at login | ✅ Done |
 | **v0.5** | screensaver extension — animated wallpaper on lock screen | ⏳ |
+| **v0.6** | crossfade loop transition — dual-player smooth mix with configurable duration | ✅ Done |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 
 ---

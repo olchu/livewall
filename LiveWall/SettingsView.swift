@@ -1,9 +1,11 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var settingsStore = SettingsStore.shared
     private let loginItemManager = LoginItemManager.shared
+    @State private var videoDuration: Double? = nil
 
     var body: some View {
         Form {
@@ -26,6 +28,37 @@ struct SettingsView: View {
                 Toggle("Pause on Battery", isOn: boolBinding(\.pauseOnBattery))
                 Toggle("Pause on Fullscreen App", isOn: boolBinding(\.pauseWhenFullscreen))
                 Toggle("Pause on Screen Lock", isOn: boolBinding(\.pauseWhenLocked))
+            }
+
+            Section("Loop Transition") {
+                Toggle("Smooth Crossfade", isOn: boolBinding(\.crossfadeEnabled))
+
+                if settingsStore.settings.crossfadeEnabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Duration")
+                            Spacer()
+                            Text(String(format: "%.1f s", settingsStore.settings.crossfadeDuration))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: crossfadeDurationBinding,
+                            in: 0.5...maxCrossfadeDuration,
+                            step: 0.5
+                        )
+                        if let dur = videoDuration {
+                            let safe = settingsStore.settings.crossfadeDuration < dur * 0.5
+                            Text(safe
+                                 ? "Video length: \(Int(dur)) s"
+                                 : "Duration exceeds 50% of video length (\(Int(dur)) s) — crossfade disabled")
+                                .font(.caption)
+                                .foregroundStyle(safe ? Color.secondary : Color.red)
+                        }
+                    }
+                }
+            }
+            .task(id: settingsStore.settings.wallpaperURL) {
+                videoDuration = await detectVideoDuration(url: settingsStore.settings.wallpaperURL)
             }
 
             Section("System") {
@@ -66,6 +99,25 @@ struct SettingsView: View {
                 presentLoginItemError(error)
             }
         }
+    }
+
+    private var maxCrossfadeDuration: Double {
+        if let dur = videoDuration { return min(5.0, dur * 0.5) }
+        return 5.0
+    }
+
+    private var crossfadeDurationBinding: Binding<Double> {
+        Binding {
+            settingsStore.settings.crossfadeDuration
+        } set: { newValue in
+            settingsStore.settings.crossfadeDuration = newValue
+        }
+    }
+
+    private func detectVideoDuration(url: URL?) async -> Double? {
+        guard let url else { return nil }
+        let asset = AVURLAsset(url: url)
+        return try? await asset.load(.duration).seconds
     }
 
     private func boolBinding(_ keyPath: WritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {

@@ -63,22 +63,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         previewItem.view = pv
         menu.addItem(previewItem)
 
-        // Version below preview
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
-        menu.addItem(NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "").then {
-            $0.isEnabled = false
-            $0.attributedTitle = NSAttributedString(
-                string: "Version \(version)",
-                attributes: [.foregroundColor: NSColor.secondaryLabelColor,
-                             .font: NSFont.systemFont(ofSize: 12)]
-            )
-        })
         menu.addItem(.separator())
 
-        menu.addItem(NSMenuItem(title: "Select Wallpaper…",
-                                action: #selector(selectWallpaper),
-                                keyEquivalent: "").then { $0.target = self })
-        menu.addItem(.separator())
+        pv.onSelectWallpaper = { [weak self] in
+            self?.statusItem?.menu?.cancelTracking()
+            self?.selectWallpaper()
+        }
 
         // Pause / Resume
         let pauseItem = NSMenuItem(title: "Pause", action: #selector(togglePause), keyEquivalent: "")
@@ -344,17 +334,75 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
 private final class WallpaperPreviewView: NSView {
     private let imageLayer = CALayer()
+    private let selectButton = NSButton()
+    private let versionLabel = NSTextField(labelWithString: "v.0.6")
+
+    var onSelectWallpaper: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+        layer?.cornerRadius = 8
+        layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        layer?.masksToBounds = true
         imageLayer.contentsGravity = .resizeAspectFill
         imageLayer.masksToBounds = true
         layer?.addSublayer(imageLayer)
+        setupButton()
+        setupVersionLabel()
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private func setupButton() {
+        let title = NSAttributedString(
+            string: "Select Wallpaper…",
+            attributes: [
+                .foregroundColor: NSColor.white,
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium)
+            ]
+        )
+        selectButton.attributedTitle = title
+        selectButton.isBordered = false
+        selectButton.wantsLayer = true
+        selectButton.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        selectButton.layer?.borderColor = NSColor.white.cgColor
+        selectButton.layer?.borderWidth = 1
+        selectButton.layer?.cornerRadius = 6
+        selectButton.target = self
+        selectButton.action = #selector(buttonTapped)
+        selectButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(selectButton)
+        NSLayoutConstraint.activate([
+            selectButton.centerXAnchor.constraint(equalTo: centerXAnchor),
+            selectButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            selectButton.widthAnchor.constraint(equalToConstant: 162),
+            selectButton.heightAnchor.constraint(equalToConstant: 28),
+        ])
+    }
+
+    private func setupVersionLabel() {
+        versionLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        versionLabel.textColor = NSColor.white.withAlphaComponent(0.9)
+        versionLabel.alignment = .right
+        versionLabel.isSelectable = false
+        versionLabel.wantsLayer = true
+        versionLabel.layer?.shadowColor = NSColor.black.cgColor
+        versionLabel.layer?.shadowOpacity = 0.45
+        versionLabel.layer?.shadowRadius = 2
+        versionLabel.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        versionLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(versionLabel)
+        NSLayoutConstraint.activate([
+            versionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            versionLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+        ])
+    }
+
+    @objc private func buttonTapped() {
+        onSelectWallpaper?()
+    }
 
     func update(image: NSImage?) {
         imageLayer.contents = image
@@ -369,13 +417,5 @@ private final class WallpaperPreviewView: NSView {
         CATransaction.setDisableActions(true)
         imageLayer.frame = bounds
         CATransaction.commit()
-    }
-}
-
-// MARK: - NSMenuItem builder helper
-private extension NSMenuItem {
-    func then(_ configure: (NSMenuItem) -> Void) -> NSMenuItem {
-        configure(self)
-        return self
     }
 }

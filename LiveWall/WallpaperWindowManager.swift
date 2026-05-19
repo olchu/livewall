@@ -20,11 +20,10 @@ final class WallpaperWindowManager: WallpaperWindowManaging {
     init(settings: SettingsStore = .shared) {
         self.settings = settings
         settingsCancellable = settings.$settings
-            .map(\.playbackMode)
-            .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] mode in
-                self?.setPlaybackMode(mode)
+            .sink { [weak self] s in
+                self?.setPlaybackMode(s.playbackMode)
+                self?.views.forEach { $0.setCrossfade(enabled: s.crossfadeEnabled, duration: s.crossfadeDuration) }
             }
         startVisibilityMonitoring()
     }
@@ -36,6 +35,8 @@ final class WallpaperWindowManager: WallpaperWindowManaging {
             let view = VideoWallpaperView(frame: CGRect(origin: .zero, size: screen.frame.size))
             view.autoresizingMask = [.width, .height]
             window.contentView = view
+            view.setCrossfade(enabled: settings.settings.crossfadeEnabled,
+                              duration: settings.settings.crossfadeDuration)
             if let url = settings.settings.wallpaperURL {
                 view.loadVideo(url: url)
             }
