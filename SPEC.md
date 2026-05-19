@@ -37,22 +37,22 @@ Primary objectives:
 ```
 LiveWall Lite
 ────────────────
-Select Wallpaper...         ✅
-Optimize selected video      ✅ optional flow during selection
-Reveal Optimized Videos      ✅ opens optimized-copy folder
-Pause / Resume              ✅
+[Preview thumbnail]          ✅ video first frame, 280×100, rounded top corners
+  [Select Wallpaper… button] ✅ ghost button centered on preview, opens file picker
 ────────────────
-CPU:  3.2%                  ✅ PerformanceMonitor
-RAM:  87 MB                 ✅ PerformanceMonitor
-GPU:  ~45 MB (device)       ✅ PerformanceMonitor
+Pause / Resume              ✅
 ────────────────
 Pause on Battery            ✅ PlaybackCoordinator + PowerModeMonitor
 Pause on Fullscreen App     ✅ PlaybackCoordinator + FullscreenAppMonitor
 Pause on Screen Lock        ✅ PlaybackCoordinator + DistributedNotificationCenter
 ────────────────
 Start at Login: On/Off      ✅ `LoginItemManager` + `SMAppService`
-Settings...                 ✅ SwiftUI Settings scene
+Settings...                 ✅ SwiftUI Settings scene (⌘,)
 Quit                        ✅
+────────────────
+CPU:  3.2%                  ✅ PerformanceMonitor
+RAM:  87 MB                 ✅ PerformanceMonitor
+GPU:  ~45 MB (device)       ✅ PerformanceMonitor
 ```
 
 Performance metrics notes:
