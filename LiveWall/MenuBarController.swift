@@ -63,6 +63,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         previewItem.view = pv
         menu.addItem(previewItem)
 
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let versionItem = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        versionItem.attributedTitle = NSAttributedString(
+            string: "Version \(version)",
+            attributes: [.foregroundColor: NSColor.secondaryLabelColor,
+                         .font: NSFont.systemFont(ofSize: 12)]
+        )
+        menu.addItem(versionItem)
+
         menu.addItem(.separator())
 
         pv.onSelectWallpaper = { [weak self] in
