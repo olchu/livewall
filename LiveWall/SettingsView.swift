@@ -6,6 +6,8 @@ struct SettingsView: View {
     @ObservedObject private var settingsStore = SettingsStore.shared
     private let loginItemManager = LoginItemManager.shared
     @State private var videoDuration: Double? = nil
+    @State private var isUpdatingLockScreen = false
+    @State private var lockScreenMessage: String?
 
     var body: some View {
         Form {
@@ -69,6 +71,36 @@ struct SettingsView: View {
                 Button("Reveal Optimized Videos") { revealOptimizedVideos() }
                 Button("Install Screen Saver…") { installScreenSaver() }
             }
+
+            Section("Lock Screen") {
+                Button("Use Current Video on Lock Screen") {
+                    applyLockScreenWallpaper()
+                }
+                .disabled(lockScreenSourceURL == nil || isUpdatingLockScreen)
+
+                Button("Restore Original Dubai") {
+                    restoreLockScreenWallpaper()
+                }
+                .disabled(!LockScreenWallpaperManager.canRestore || isUpdatingLockScreen)
+
+                if isUpdatingLockScreen {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Preparing a macOS-compatible Lock Screen video…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let lockScreenMessage {
+                    Text(lockScreenMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Requires macOS 26 and the Dubai wallpaper downloaded in System Settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding(20)
@@ -104,6 +136,18 @@ struct SettingsView: View {
     private var maxCrossfadeDuration: Double {
         if let dur = videoDuration { return min(5.0, dur * 0.5) }
         return 5.0
+    }
+
+    private var lockScreenSourceURL: URL? {
+        if let wallpaperURL = settingsStore.settings.wallpaperURL {
+            return wallpaperURL
+        }
+
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Movies/LiveWall", isDirectory: true)
+        return ["mp4", "mov", "m4v"]
+            .map { directory.appendingPathComponent("wallpaper.\($0)") }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     private var crossfadeDurationBinding: Binding<Double> {
@@ -148,6 +192,42 @@ struct SettingsView: View {
             alert.messageText = "Could not install LiveWall Screen Saver"
             alert.runModal()
         }
+    }
+
+    private func applyLockScreenWallpaper() {
+        guard let videoURL = lockScreenSourceURL else { return }
+        isUpdatingLockScreen = true
+        lockScreenMessage = nil
+
+        Task {
+            do {
+                try await LockScreenWallpaperManager.apply(videoURL: videoURL)
+                lockScreenMessage = "Applied and activated. Lock the Mac to verify the animated wallpaper."
+            } catch {
+                presentLockScreenError(error)
+            }
+            isUpdatingLockScreen = false
+        }
+    }
+
+    private func restoreLockScreenWallpaper() {
+        isUpdatingLockScreen = true
+        lockScreenMessage = nil
+
+        do {
+            try LockScreenWallpaperManager.restore()
+            lockScreenMessage = "The original Dubai wallpaper was restored."
+        } catch {
+            presentLockScreenError(error)
+        }
+        isUpdatingLockScreen = false
+    }
+
+    private func presentLockScreenError(_ error: Error) {
+        let alert = NSAlert(error: error)
+        alert.messageText = "Could not update Lock Screen wallpaper"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
     }
 }
 

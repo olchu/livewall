@@ -112,23 +112,128 @@ when a different video is selected.
 
 ---
 
-### 3.5 Lock Screen / Screensaver ⏳ v0.5
+### 3.5 Lock Screen / Screensaver 🔄
 
-macOS restricts app windows to the user session — they are always behind the lock screen UI.
-To show animated wallpaper during lock, a `ScreenSaver` extension (`.saver` bundle) is required.
+macOS restricts app windows to the unlocked user session, so the desktop-level
+`WallpaperWindow` cannot appear above the system Lock Screen.
+
+The original implementation assumed that a legacy `.saver` bundle was sufficient on
+all supported macOS versions. Testing on macOS 26.5.2 (Tahoe) disproved that assumption:
+the bundle installs and builds, but Tahoe's active Lock Screen is driven by the newer
+Wallpaper/Aerial provider pipeline. Third-party `.saver` bundles run through
+`legacyScreenSaver` and are not a reliable path to animated Lock Screen playback.
+
+#### Current state
 
 | Requirement | Status |
 |---|---|
 | `.saver` bundle target in Xcode | ✅ `LiveWallScreenSaver` target |
 | `ScreenSaverView` subclass playing `AVPlayer` | ✅ `LiveWallScreenSaverView` |
-| Shared `UserDefaults` via App Group to read `wallpaperURL` | ✅ shared security-scoped bookmark + path fallback |
+| Video exchange with legacy saver | 🔄 copy to `~/Movies/LiveWall/wallpaper.<ext>` |
 | App Group entitlement in both targets | ✅ `group.com.ochurkin.LiveWall` |
-| Muted, looping playback matching main app behavior | ✅ muted `AVPlayer` + loop observer |
+| Muted, looping legacy playback | ✅ muted `AVPlayer` + loop observer |
+| Reliable Lock Screen animation on macOS 13–15 | ⏳ needs compatibility test matrix |
+| Native Wallpaper/Aerial integration on macOS 26+ | ⏳ research and prototype |
+| Installed/selected/active status reporting | ⏳ |
 
 App Group ID: `group.com.ochurkin.LiveWall`
 
-User flow: user sets LiveWall as their system screensaver in System Settings → Screen Saver.
-The same video plays during idle/screensaver and on the lock screen.
+#### Target architecture
+
+Lock Screen integration is isolated behind a platform adapter. The rest of the app
+must not know whether macOS uses a legacy screen saver or a native wallpaper provider.
+
+```swift
+protocol LockScreenWallpaperProviding {
+    func prepare(videoURL: URL) async throws
+    func activationStatus() async -> LockScreenActivationStatus
+    func activate() async throws
+    func removeManagedAssets() async throws
+}
+```
+
+Implementations:
+
+- `LegacyScreenSaverProvider` — macOS 13–15; installs/updates the `.saver`, publishes
+  a readable video copy, and directs the user to select LiveWall in System Settings.
+- `TahoeWallpaperProvider` — macOS 26+; supplies the selected video to Tahoe's native
+  Wallpaper/Aerial pipeline if a supportable and reversible integration is confirmed.
+- `UnsupportedLockScreenProvider` — explicit fallback when native activation is not
+  safe or available; preserves desktop playback and explains the limitation.
+
+Provider selection is based on `ProcessInfo.operatingSystemVersion`. Dependency
+injection is used so status detection and activation can be unit tested without
+changing the user's wallpaper configuration.
+
+#### Tahoe implementation plan
+
+**Phase 1 — Baseline and evidence**
+
+- Record behavior on macOS 13, 14, 15, and 26 for preview, idle start, Apple menu
+  `Lock Screen`, sleep/wake, logout, multiple displays, and multiple Spaces.
+- Confirm the selected Idle provider from
+  `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`.
+- Capture `legacyScreenSaver`, `WallpaperAgent`, and LiveWall logs so installation,
+  selection, loading, decoding, and Lock Screen presentation are distinguishable.
+- Add a small diagnostic report to Settings; it must redact user paths before export.
+
+**Phase 2 — Native Tahoe feasibility spike**
+
+- Determine whether macOS 26 exposes a public or supported provider/asset registration
+  mechanism for third-party video wallpaper.
+- Prototype with one app-owned H.264/HEVC `.mov`, thumbnail, stable identifier, and
+  no modification of Apple-downloaded assets.
+- Verify that macOS, not the LiveWall process, renders the prototype during idle and
+  on the Lock Screen with the system clock visible.
+- Verify behavior after LiveWall quits, reboot, sleep/wake, display changes, and video
+  replacement.
+- Document every filesystem/configuration change made by the prototype.
+
+**Go/no-go gate:** ship `TahoeWallpaperProvider` only if activation is deterministic,
+survives reboot, can be fully reversed, does not replace Apple assets, and does not
+require disabling SIP or weakening system security. Direct writes to undocumented
+Wallpaper databases/manifests remain experimental until these conditions are met.
+
+**Phase 3 — Production provider**
+
+- Copy/transcode the selected source into an app-owned managed-assets directory using
+  an atomic temporary-file replacement.
+- Generate the still frame/thumbnail required by System Settings.
+- Register a stable LiveWall asset/provider entry without touching unrelated choices.
+- Activate it for `Idle` while preserving the user's previous Idle selection for
+  rollback.
+- Make repeated activation idempotent and clean up obsolete managed videos.
+- Restore the previous selection and remove only LiveWall-owned assets on disable or
+  uninstall.
+
+**Phase 4 — UX**
+
+- Replace `Install Screen Saver…` with a version-aware `Lock Screen` settings section.
+- Show one of: `Not configured`, `Preparing`, `Select in System Settings`, `Active`,
+  `Needs repair`, or `Unsupported on this macOS version`.
+- Provide `Use Current Video on Lock Screen`, `Open Wallpaper Settings`, `Repair`,
+  and `Disable & Restore Previous` actions as appropriate.
+- Never report success merely because a `.saver` bundle was copied; success requires
+  the system's active Idle provider to resolve to LiveWall.
+
+**Phase 5 — Verification**
+
+- Unit-test provider selection, state transitions, idempotency, rollback metadata,
+  managed-path validation, and failure recovery.
+- Integration-test supported codecs, corrupt/removed files, rapid video changes,
+  FileVault lock, manual lock, idle lock, sleep/wake, reboot, and multiple displays.
+- Measure Lock Screen startup latency, CPU/GPU use, and disk growth.
+- Sign and notarize the app plus every executable bundle; verify both `arm64` and
+  `x86_64` for the legacy `.saver`.
+
+#### Expected user flow
+
+1. User selects a video in LiveWall.
+2. LiveWall prepares a platform-appropriate Lock Screen asset.
+3. User confirms activation or completes the required choice in System Settings.
+4. LiveWall verifies the active Idle provider and shows `Active`.
+5. macOS renders the video during screen saver/Lock Screen; LiveWall's desktop window
+   remains paused while the session is locked.
 
 ---
 
@@ -283,11 +388,16 @@ LiveWallLiteApp                   ✅ LiveWallApp.swift
 ├── LoginItemManager              ✅ LoginItemManager.swift
 │   └── launch at login
 │
-└── LiveWallScreenSaver           ⏳ v0.5
+├── LockScreenWallpaperProvider  🔄 platform adapter
+│   ├── LegacyScreenSaverProvider ⏳ macOS 13–15
+│   ├── TahoeWallpaperProvider    ⏳ macOS 26+ feasibility spike
+│   └── UnsupportedProvider       ⏳ safe fallback
+│
+└── LiveWallScreenSaver           🔄 legacy compatibility path
     ├── .saver bundle target      ✅ LiveWallScreenSaver
     ├── ScreenSaverView subclass  ✅ LiveWallScreenSaverView
     ├── AVPlayer (muted, looping) ✅
-    └── reads wallpaperURL via App Group UserDefaults ✅
+    └── reads managed copy from ~/Movies/LiveWall 🔄
 ```
 
 ---
@@ -352,8 +462,10 @@ Current behaviour (v0.3): app launches silently in menu bar, restores last wallp
 | **v0.2** | multi-monitor, sleep/wake recovery, display changes, persistence | ✅ Done |
 | **v0.3** | battery saver, pause on battery/fullscreen/lock, performance metrics | ✅ Done |
 | **v0.4** | settings window, playback modes UI, launch at login | ✅ Done |
-| **v0.5** | screensaver extension — animated wallpaper on lock screen | ⏳ |
+| **v0.5** | legacy `.saver` prototype; proved insufficient as the Tahoe primary path | 🔄 |
 | **v0.6** | crossfade loop transition — dual-player smooth mix with configurable duration | ✅ Done |
+| **v0.7** | Lock Screen provider abstraction, OS compatibility matrix, Tahoe feasibility spike | ⏳ |
+| **v0.8** | production Tahoe provider, activation UX, rollback, integration tests | ⏳ |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 
 ---
@@ -377,6 +489,10 @@ audio wallpapers · Windows support · web wallpapers · animated HTML
 | Fullscreen detection without SR permission | `FullscreenAppMonitor` returns `false` — no false positives |
 | Menu bar contrast mismatch | `DesktopWallpaperSync` sets first video frame as real desktop picture before video overlay |
 | Per-Space desktop pictures | Current Space sync is supported; other Spaces may keep their own desktop picture until activated/resynced |
+| Legacy `.saver` unreliable on Tahoe | Keep it as a compatibility path; use a versioned provider abstraction |
+| Tahoe native pipeline is not clearly documented | Feasibility spike + go/no-go gate before production implementation |
+| Wallpaper configuration corruption | No broad replacement; atomic writes, backup exact prior state, scoped rollback |
+| App update/uninstall leaves managed assets | Stable ownership metadata + remove only LiveWall-owned files |
 
 ---
 

@@ -171,3 +171,262 @@ enum OptimizedVideoExporter {
     }
 
 }
+
+enum LockScreenWallpaperManager {
+    private static let dubaiAssetID = "00BA71CD-2C54-415A-A68A-8358E677D750"
+    private static let targetDuration = CMTime(seconds: 360, preferredTimescale: 600)
+    private static let appliedKey = "com.ochurkin.LiveWall.animatedLockScreenApplied"
+
+    enum LockScreenError: LocalizedError {
+        case requiresTahoe
+        case aerialNotDownloaded
+        case noVideoTrack
+        case invalidDuration
+        case cannotCreateExportSession
+        case exportFailed
+        case cannotActivateAerial
+        case noBackup
+
+        var errorDescription: String? {
+            switch self {
+            case .requiresTahoe:
+                "Live Lock Screen requires macOS Tahoe 26 or later."
+            case .aerialNotDownloaded:
+                "Download and select the Dubai wallpaper in System Settings first."
+            case .noVideoTrack:
+                "The selected wallpaper does not contain a readable video track."
+            case .invalidDuration:
+                "The selected wallpaper has an invalid duration."
+            case .cannotCreateExportSession:
+                "Could not create the HEVC Lock Screen export session."
+            case .exportFailed:
+                "The Lock Screen video export did not complete."
+            case .cannotActivateAerial:
+                "The Dubai Aerial could not be activated as the system wallpaper."
+            case .noBackup:
+                "No original Dubai backup was found."
+            }
+        }
+    }
+
+    static var canRestore: Bool {
+        FileManager.default.fileExists(atPath: backupURL.path)
+    }
+
+    static var isApplied: Bool {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: appliedKey) != nil {
+            return defaults.bool(forKey: appliedKey)
+        }
+
+        // Migrate installations made before the state flag existed. A restored
+        // original has the same size and modification date as its preserved copy.
+        guard let current = try? aerialURL.resourceValues(
+            forKeys: [.fileSizeKey, .contentModificationDateKey]
+        ), let original = try? backupURL.resourceValues(
+            forKeys: [.fileSizeKey, .contentModificationDateKey]
+        ) else { return false }
+
+        return current.fileSize != original.fileSize
+            || current.contentModificationDate != original.contentModificationDate
+    }
+
+    static func apply(videoURL: URL) async throws {
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 else {
+            throw LockScreenError.requiresTahoe
+        }
+        guard FileManager.default.fileExists(atPath: aerialURL.path) else {
+            throw LockScreenError.aerialNotDownloaded
+        }
+
+        try createBackupIfNeeded()
+        let preparedURL = try await prepareLockScreenVideo(from: videoURL)
+        try replaceAerial(with: preparedURL)
+        try activateDubaiAerialAsDesktopWallpaper()
+        UserDefaults.standard.set(true, forKey: appliedKey)
+        restartWallpaperAgent()
+    }
+
+    static func restore() throws {
+        guard FileManager.default.fileExists(atPath: backupURL.path) else {
+            throw LockScreenError.noBackup
+        }
+        try replaceAerial(with: backupURL, keepSource: true)
+        UserDefaults.standard.set(false, forKey: appliedKey)
+        restartWallpaperAgent()
+    }
+
+    private static var aerialsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials/videos", isDirectory: true)
+    }
+
+    private static var aerialURL: URL {
+        aerialsDirectory.appendingPathComponent("\(dubaiAssetID).mov")
+    }
+
+    private static var backupURL: URL {
+        aerialsDirectory.appendingPathComponent("\(dubaiAssetID).livewall-original.mov")
+    }
+
+    private static var wallpaperStoreURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/com.apple.wallpaper/Store/Index.plist"
+            )
+    }
+
+    private static func createBackupIfNeeded() throws {
+        guard !FileManager.default.fileExists(atPath: backupURL.path) else { return }
+        try FileManager.default.copyItem(at: aerialURL, to: backupURL)
+    }
+
+    private static func prepareLockScreenVideo(from sourceURL: URL) async throws -> URL {
+        let asset = AVURLAsset(url: sourceURL)
+        guard let sourceTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            throw LockScreenError.noVideoTrack
+        }
+        let sourceDuration = try await asset.load(.duration)
+        guard sourceDuration.isNumeric, sourceDuration > .zero else {
+            throw LockScreenError.invalidDuration
+        }
+
+        let composition = AVMutableComposition()
+        guard let compositionTrack = composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else {
+            throw LockScreenError.noVideoTrack
+        }
+        compositionTrack.preferredTransform = try await sourceTrack.load(.preferredTransform)
+
+        var cursor = CMTime.zero
+        while cursor < targetDuration {
+            let remaining = targetDuration - cursor
+            let segmentDuration = min(sourceDuration, remaining)
+            try compositionTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: segmentDuration),
+                of: sourceTrack,
+                at: cursor
+            )
+            cursor = cursor + segmentDuration
+        }
+
+        guard let session = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetHEVC1920x1080
+        ) else {
+            throw LockScreenError.cannotCreateExportSession
+        }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LiveWall-LockScreen-\(UUID().uuidString).mov")
+        try? FileManager.default.removeItem(at: outputURL)
+        session.shouldOptimizeForNetworkUse = false
+
+        do {
+            try await session.export(to: outputURL, as: .mov)
+        } catch {
+            try? FileManager.default.removeItem(at: outputURL)
+            throw LockScreenError.exportFailed
+        }
+        return outputURL
+    }
+
+    private static func replaceAerial(with sourceURL: URL, keepSource: Bool = false) throws {
+        let temporaryURL = aerialsDirectory
+            .appendingPathComponent(".\(dubaiAssetID).livewall-replacement.mov")
+        try? FileManager.default.removeItem(at: temporaryURL)
+        try FileManager.default.copyItem(at: sourceURL, to: temporaryURL)
+        _ = try FileManager.default.replaceItemAt(aerialURL, withItemAt: temporaryURL)
+        if !keepSource {
+            try? FileManager.default.removeItem(at: sourceURL)
+        }
+    }
+
+    private static func activateDubaiAerialAsDesktopWallpaper() throws {
+        let data = try Data(contentsOf: wallpaperStoreURL)
+        let propertyList = try PropertyListSerialization.propertyList(
+            from: data,
+            options: [.mutableContainersAndLeaves],
+            format: nil
+        )
+        guard let root = propertyList as? NSMutableDictionary,
+              activateDubaiAerial(in: root) else {
+            throw LockScreenError.cannotActivateAerial
+        }
+
+        let updatedData = try PropertyListSerialization.data(
+            fromPropertyList: root,
+            format: .binary,
+            options: 0
+        )
+        try updatedData.write(to: wallpaperStoreURL, options: .atomic)
+    }
+
+    @discardableResult
+    private static func activateDubaiAerial(in value: Any) -> Bool {
+        var didChange = false
+
+        if let dictionary = value as? NSMutableDictionary {
+            if let desktop = dictionary["Desktop"] as? NSMutableDictionary,
+               let idle = dictionary["Idle"] as? NSDictionary,
+               let idleContent = idle["Content"],
+               isDubaiAerialContent(idleContent) {
+                desktop["Content"] = mutableCopy(of: idleContent)
+                desktop["LastSet"] = Date()
+                desktop["LastUse"] = Date()
+                didChange = true
+            }
+
+            for child in dictionary.allValues {
+                didChange = activateDubaiAerial(in: child) || didChange
+            }
+        } else if let array = value as? NSMutableArray {
+            for child in array {
+                didChange = activateDubaiAerial(in: child) || didChange
+            }
+        }
+
+        return didChange
+    }
+
+    private static func isDubaiAerialContent(_ value: Any) -> Bool {
+        guard let content = value as? NSDictionary,
+              let choices = content["Choices"] as? NSArray else { return false }
+
+        return choices.contains { choice in
+            guard let choice = choice as? NSDictionary,
+                  choice["Provider"] as? String == "com.apple.wallpaper.choice.aerials",
+                  let configuration = choice["Configuration"] as? Data,
+                  let decoded = try? PropertyListSerialization.propertyList(
+                    from: configuration,
+                    options: [],
+                    format: nil
+                  ),
+                  let values = decoded as? NSDictionary else { return false }
+            return values["assetID"] as? String == dubaiAssetID
+        }
+    }
+
+    private static func mutableCopy(of value: Any) -> Any {
+        guard let data = try? PropertyListSerialization.data(
+            fromPropertyList: value,
+            format: .binary,
+            options: 0
+        ) else { return value }
+
+        return (try? PropertyListSerialization.propertyList(
+            from: data,
+            options: [.mutableContainersAndLeaves],
+            format: nil
+        )) ?? value
+    }
+
+    private static func restartWallpaperAgent() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        process.arguments = ["WallpaperAgent"]
+        try? process.run()
+    }
+}
