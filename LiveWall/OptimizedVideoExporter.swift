@@ -314,7 +314,7 @@ enum LockScreenWallpaperManager {
 
         guard let session = AVAssetExportSession(
             asset: composition,
-            presetName: AVAssetExportPresetHEVC1920x1080
+            presetName: AVAssetExportPresetHEVC3840x2160
         ) else {
             throw LockScreenError.cannotCreateExportSession
         }
