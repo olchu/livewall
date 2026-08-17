@@ -117,123 +117,135 @@ when a different video is selected.
 macOS restricts app windows to the unlocked user session, so the desktop-level
 `WallpaperWindow` cannot appear above the system Lock Screen.
 
-The original implementation assumed that a legacy `.saver` bundle was sufficient on
-all supported macOS versions. Testing on macOS 26.5.2 (Tahoe) disproved that assumption:
-the bundle installs and builds, but Tahoe's active Lock Screen is driven by the newer
-Wallpaper/Aerial provider pipeline. Third-party `.saver` bundles run through
-`legacyScreenSaver` and are not a reliable path to animated Lock Screen playback.
+**Abandoned approach — direct Aerial asset substitution.** A v0.5 attempt
+(`LockScreenWallpaperManager`, since removed) overwrote the on-disk video for an
+existing Apple Aerial (`~/Library/Application Support/com.apple.wallpaper/aerials/videos/{id}.mov`)
+and patched the internal `Store/Index.plist`. This reliably produced a black screen
+on wake/lock-cycling and broke Mission Control desktop thumbnails. Root cause,
+confirmed two ways: (1) the substituted video didn't match the asset's manifest-declared
+specs (`~/Library/Application Support/com.apple.wallpaper/aerials/manifest/entries.json`
+declares this asset as 4K/SDR/**240fps** — unreproducible from arbitrary user video), and
+(2) external confirmation from Cindori's *Backdrop* developer (the first app to
+reverse-engineer custom Lock Screen video): naively substituting/cycling an Aerial
+asset "will eventually crash the wallpaper extension, producing a black screen" even
+with correctly-specced video. This is a real bug in Apple's `WallpaperAgent`/Aerial
+render pipeline, not something fixable by matching file specs more closely. This path
+is closed; do not resume it. `ENABLE_APP_SANDBOX` was restored to `YES` after removal.
+
+**Current approach — `com.apple.wallpaper` ExtensionKit extension.** Modeled on
+[Phosphene](https://github.com/kageroumado/phosphene) (MIT), which uses the same
+technique to ship custom video wallpapers to both desktop and Lock Screen without
+touching any Apple-owned asset. Instead of substituting content into an existing
+system-managed asset, LiveWall registers as its **own** wallpaper provider — a
+peer of Apple's built-in Aerials in System Settings → Wallpaper — via the
+`com.apple.wallpaper` ExtensionKit extension point (introduced macOS 14) and the
+private `WallpaperExtensionKit.framework` (loaded via `dlopen`, since it ships no
+public headers). This is still Apple's own render pipeline underneath, so the
+`WallpaperAgent` instability above is not fully avoidable — Phosphene handles it
+with an explicit "spiral of death" detector that auto-restarts the agent — but the
+failure mode is *system-wide flakiness to defend against*, not something LiveWall's
+own hack directly causes by corrupting a signed asset out from under macOS.
 
 #### Current state
 
 | Requirement | Status |
 |---|---|
-| `.saver` bundle target in Xcode | ✅ `LiveWallScreenSaver` target |
-| `ScreenSaverView` subclass playing `AVPlayer` | ✅ `LiveWallScreenSaverView` |
-| Video exchange with legacy saver | 🔄 copy to `~/Movies/LiveWall/wallpaper.<ext>` |
-| App Group entitlement in both targets | ✅ `group.com.ochurkin.LiveWall` |
-| Muted, looping legacy playback | ✅ muted `AVPlayer` + loop observer |
-| Reliable Lock Screen animation on macOS 13–15 | ⏳ needs compatibility test matrix |
-| Native Wallpaper/Aerial integration on macOS 26+ | ⏳ research and prototype |
-| Installed/selected/active status reporting | ⏳ |
+| `LiveWallWallpaperExtension.appex` target (ExtensionKit) | ✅ `com.apple.product-type.extensionkit-extension`, embeds via `$(EXTENSIONS_FOLDER_PATH)` |
+| `Info.plist` declares `com.apple.wallpaper` extension point | ✅ `EXAppExtensionAttributes.EXExtensionPointIdentifier` |
+| Extension sandboxed, builds Debug + Release | ✅ |
+| `dlopen` of `WallpaperExtensionKit.framework` + read-only class self-check | ✅ `LiveWallWallpaperExtension.swift` — confirmed on-device: all 5 expected classes present |
+| Registers with WallpaperAgent | ✅ confirmed via `pluginkit -m -p com.apple.wallpaper` and `extension.log` |
+| Appears as a selectable collection in System Settings → Wallpaper | ✅ confirmed on-device — "LiveWall" collection with real video thumbnail, alongside built-in Aerials |
+| XPC handler (`acquire`/`update`/`invalidate`/`snapshot`/...) | ✅ `WallpaperXPCHandler.swift` — full ~30-selector protocol; `acquire`/`invalidate`/`update` do real work, rest are honest stubs |
+| Caller validation (`SecCodeCheckValidity` against Apple-signed WallpaperAgent) | ✅ `CallerValidation.swift` |
+| Bridging header for private XPC protocols (`WallpaperExtensionXPCProtocol` et al.) | ✅ `WallpaperExtension-Bridging-Header.h` — declarations only, no memory layout assumptions |
+| File-based extension logging (unified log redacts sandboxed extension output as `<private>`) | ✅ `Logging.swift` → `~/Library/Containers/com.ochurkin.LiveWall.WallpaperExtension/Data/Documents/extension.log` |
+| Frame rendering (`AVSampleBufferDisplayLayer` + manual `AVAssetReader`) | ✅ `VideoRenderer.swift` (Phase 3 MVP: single video, PTS-offset loop restart — not Phosphene's full dual-reader gapless preload) — **confirmed on-device: real video plays on both desktop and Lock Screen** |
+| Per-surface context keying (desktop / Settings preview / Lock Screen each get their own `CAContext`) | ✅ `WallpaperState.swift` keyed by WallpaperID UUID (`WallpaperIDProbe.swift`) — fixes a confirmed on-device bug where a Settings-preview probe's `invalidate` tore down the live desktop's only context (single-slot model) |
+| Settings view model (choice shown in the picker) | ✅ `WallpaperSettingsProvider.swift` + `CodableShims.swift` — built via the **safe** `NSKeyedArchiver`/`setClass(forClassName:)` remap technique (no raw memory writes; a field mismatch fails to decode, doesn't corrupt anything) |
+| Single fixed video source (`~/Movies/LiveWall/wallpaper.<ext>`) | ✅ `VideoSource.swift` — MVP scope; no multi-video library yet (Phosphene's `VideoLibrary`) |
+| Snapshot generation for Lock Screen transitions (`WallpaperSnapshotXPC`) | ⏳ stub (`nil` reply) — Settings picker preview may lag the static thumbnail during transitions |
+| `PlaybackPolicy` (thermal/battery/presentation-mode aware pause/resume) | ⏳ not started — renderer always plays once started, no pause on battery/fullscreen/lock parity with the desktop overlay yet |
+| Spiral-of-death detection + `WallpaperAgent` auto-restart | ⏳ not started |
+| Legacy `.saver` bundle (macOS 13–15 fallback) | ✅ kept as-is, unaffected by this work |
 
-App Group ID: `group.com.ochurkin.LiveWall`
+**Known MVP limitations** (deliberate scope cuts, not bugs): single video only,
+no adaptive quality tiers, loop restart is a fresh `AVAssetReader` (not Phosphene's
+preloaded dual-reader — a loop boundary may have a tiny hitch), no pause on
+battery/fullscreen/lock (Phase 4), teardown grace timer is 15s flat (not tuned).
 
-#### Target architecture
+Old `LockScreenWallpaperManager` / `SettingsView` "Lock Screen" section (the
+abandoned approach) — ⏳ still present, should be removed once the extension path
+is confirmed stable over longer/normal use, to prevent accidentally re-triggering
+the old bug.
 
-Lock Screen integration is isolated behind a platform adapter. The rest of the app
-must not know whether macOS uses a legacy screen saver or a native wallpaper provider.
+#### Phased plan
 
-```swift
-protocol LockScreenWallpaperProviding {
-    func prepare(videoURL: URL) async throws
-    func activationStatus() async -> LockScreenActivationStatus
-    func activate() async throws
-    func removeManagedAssets() async throws
-}
-```
+**Phase 1 — Skeleton (✅ done, confirmed on-device)**
+Extension target registers with the `com.apple.wallpaper` extension point, loads the
+private framework, and self-checks for expected classes via `objc_getClass` (no
+instances created, no memory touched). Confirmed via `pluginkit -m -p com.apple.wallpaper`
+(listed alongside Apple's own Aerial/Sonoma/etc. providers and one other third-party
+app, `wallspace.app.wallpaper-extension`) and via `extension.log`: dlopen succeeds,
+all 5 expected classes present on macOS 26.5.
 
-Implementations:
+**Phase 2 — XPC acceptance (✅ done, confirmed on-device)**
+`AppExtensionConfiguration.accept(connection:)` implemented for real: caller validation
+via `SecCodeCheckValidity` (`CallerValidation.swift`), exported/remote interface setup,
+class whitelist for the ~30 private XPC selectors (`WallpaperExtensionConfig.swift`),
+full protocol implemented as honest-empty-reply stubs (`WallpaperXPCHandler.swift`) —
+still no rendering. Confirmed on-device: WallpaperAgent connects, the connection is
+accepted (not rejected, unlike Phase 1), and calls real methods (`provideSettingsViewModels`
+observed). Protocol declarations live in `WallpaperExtension-Bridging-Header.h` — plain
+Objective-C forward declarations, no memory-layout assumptions (those start in Phase 3).
 
-- `LegacyScreenSaverProvider` — macOS 13–15; installs/updates the `.saver`, publishes
-  a readable video copy, and directs the user to select LiveWall in System Settings.
-- `TahoeWallpaperProvider` — macOS 26+; supplies the selected video to Tahoe's native
-  Wallpaper/Aerial pipeline if a supportable and reversible integration is confirmed.
-- `UnsupportedLockScreenProvider` — explicit fallback when native activation is not
-  safe or available; preserves desktop playback and explains the limitation.
+**Phase 3 — Rendering MVP (✅ done, confirmed on-device)**
+Single-video renderer (`VideoRenderer.swift`) driving `AVSampleBufferDisplayLayer`
+manually via `AVAssetReader` (`AVPlayerLayer` does not composite in a remote
+`CAContext`). `acquire` creates a real `CAContext`/`CALayer`, defers its XPC reply
+until the first frame is actually composited (never a black flash), and reuses the
+context on re-acquire. Settings view model built via the safe archiver-remap
+technique — no raw memory writes for that part. The only raw memory pokes are the
+small, bounds-checked, fail-closed `createRemoteContextXPC`/`createSnapshotXPC` in
+`RuntimeHelpers.swift` (ported from Phosphene, MIT).
 
-Provider selection is based on `ProcessInfo.operatingSystemVersion`. Dependency
-injection is used so status detection and activation can be unit tested without
-changing the user's wallpaper configuration.
+Found and fixed one real bug during on-device testing: an initial single-global-slot
+`WallpaperState` let a Settings-preview probe's `acquire`+`invalidate` (WallpaperAgent
+multiplexes desktop + preview + Lock Screen through one connection) tear down the
+live desktop's only context after its 15s teardown grace fired — the desktop went
+gray a few seconds after selecting LiveWall. Fixed by keying contexts per WallpaperID
+UUID (`WallpaperState.swift`, `WallpaperIDProbe.swift`) so each surface owns its own
+context and can't steal or kill another's. **Confirmed working: real video plays on
+both the desktop and the Lock Screen simultaneously**, with the main `LiveWall.app`
+fully quit (proving it's the extension rendering, not the legacy overlay window).
 
-#### Tahoe implementation plan
+**Phase 3 — Rendering**
+`AVSampleBufferDisplayLayer`-driven renderer (not `AVPlayerLayer`, which silently
+fails inside a remote `CAContext`) with a manual `AVAssetReader` pipeline and
+PTS/DTS offset for gapless looping. This is where the raw ivar-offset memory writes
+(`WallpaperRemoteContextXPC`, `WallpaperSnapshotXPC` construction) become necessary —
+land these behind explicit bounds checks that fail closed (as Phosphene does), and
+validate on-device before considering this phase done; a wrong offset writes into
+`WallpaperAgent`'s memory.
 
-**Phase 1 — Baseline and evidence**
+**Phase 4 — Resilience**
+`PlaybackPolicy` (battery/thermal/presentation-mode), spiral-of-death detection +
+auto-restart, multi-display/per-Space selection, pause-when-occluded.
 
-- Record behavior on macOS 13, 14, 15, and 26 for preview, idle start, Apple menu
-  `Lock Screen`, sleep/wake, logout, multiple displays, and multiple Spaces.
-- Confirm the selected Idle provider from
-  `~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`.
-- Capture `legacyScreenSaver`, `WallpaperAgent`, and LiveWall logs so installation,
-  selection, loading, decoding, and Lock Screen presentation are distinguishable.
-- Add a small diagnostic report to Settings; it must redact user paths before export.
+**Phase 5 — UX + cleanup**
+Settings UI to manage the extension's video library. Remove the abandoned
+`LockScreenWallpaperManager`/Aerial-substitution code and its Settings section.
 
-**Phase 2 — Native Tahoe feasibility spike**
-
-- Determine whether macOS 26 exposes a public or supported provider/asset registration
-  mechanism for third-party video wallpaper.
-- Prototype with one app-owned H.264/HEVC `.mov`, thumbnail, stable identifier, and
-  no modification of Apple-downloaded assets.
-- Verify that macOS, not the LiveWall process, renders the prototype during idle and
-  on the Lock Screen with the system clock visible.
-- Verify behavior after LiveWall quits, reboot, sleep/wake, display changes, and video
-  replacement.
-- Document every filesystem/configuration change made by the prototype.
-
-**Go/no-go gate:** ship `TahoeWallpaperProvider` only if activation is deterministic,
-survives reboot, can be fully reversed, does not replace Apple assets, and does not
-require disabling SIP or weakening system security. Direct writes to undocumented
-Wallpaper databases/manifests remain experimental until these conditions are met.
-
-**Phase 3 — Production provider**
-
-- Copy/transcode the selected source into an app-owned managed-assets directory using
-  an atomic temporary-file replacement.
-- Generate the still frame/thumbnail required by System Settings.
-- Register a stable LiveWall asset/provider entry without touching unrelated choices.
-- Activate it for `Idle` while preserving the user's previous Idle selection for
-  rollback.
-- Make repeated activation idempotent and clean up obsolete managed videos.
-- Restore the previous selection and remove only LiveWall-owned assets on disable or
-  uninstall.
-
-**Phase 4 — UX**
-
-- Replace `Install Screen Saver…` with a version-aware `Lock Screen` settings section.
-- Show one of: `Not configured`, `Preparing`, `Select in System Settings`, `Active`,
-  `Needs repair`, or `Unsupported on this macOS version`.
-- Provide `Use Current Video on Lock Screen`, `Open Wallpaper Settings`, `Repair`,
-  and `Disable & Restore Previous` actions as appropriate.
-- Never report success merely because a `.saver` bundle was copied; success requires
-  the system's active Idle provider to resolve to LiveWall.
-
-**Phase 5 — Verification**
-
-- Unit-test provider selection, state transitions, idempotency, rollback metadata,
-  managed-path validation, and failure recovery.
-- Integration-test supported codecs, corrupt/removed files, rapid video changes,
-  FileVault lock, manual lock, idle lock, sleep/wake, reboot, and multiple displays.
-- Measure Lock Screen startup latency, CPU/GPU use, and disk growth.
-- Sign and notarize the app plus every executable bundle; verify both `arm64` and
-  `x86_64` for the legacy `.saver`.
-
-#### Expected user flow
+#### Expected user flow (once complete)
 
 1. User selects a video in LiveWall.
-2. LiveWall prepares a platform-appropriate Lock Screen asset.
-3. User confirms activation or completes the required choice in System Settings.
-4. LiveWall verifies the active Idle provider and shows `Active`.
-5. macOS renders the video during screen saver/Lock Screen; LiveWall's desktop window
-   remains paused while the session is locked.
+2. LiveWall's (unsandboxed) menu bar app writes it into the extension's sandbox
+   container and signals the change via Darwin notification.
+3. User picks "LiveWall" as their wallpaper/Lock Screen source in System Settings →
+   Wallpaper, exactly like picking a built-in Aerial.
+4. macOS renders the video during idle/Lock Screen via the extension running inside
+   `WallpaperAgent`; LiveWall's desktop `WallpaperWindow` remains paused while the
+   session is locked (unchanged from today).
 
 ---
 
@@ -464,8 +476,9 @@ Current behaviour (v0.3): app launches silently in menu bar, restores last wallp
 | **v0.4** | settings window, playback modes UI, launch at login | ✅ Done |
 | **v0.5** | legacy `.saver` prototype; proved insufficient as the Tahoe primary path | 🔄 |
 | **v0.6** | crossfade loop transition — dual-player smooth mix with configurable duration | ✅ Done |
-| **v0.7** | Lock Screen provider abstraction, OS compatibility matrix, Tahoe feasibility spike | ⏳ |
-| **v0.8** | production Tahoe provider, activation UX, rollback, integration tests | ⏳ |
+| **v0.6.1** | Aerial-asset-substitution Lock Screen hack — shipped, caused black screen on wake, abandoned | ❌ Reverted |
+| **v0.7** | `com.apple.wallpaper` ExtensionKit target — skeleton registers + self-checks (Phase 1 of §3.5) | 🔄 |
+| **v0.8** | Wallpaper extension: XPC handler, rendering, resilience (Phases 2–4 of §3.5) | ⏳ |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 
 ---
