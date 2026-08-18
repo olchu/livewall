@@ -71,6 +71,29 @@ final class WallpaperState: Sendable {
         for renderer in renderers { body(renderer) }
     }
 
+    /// Rebuild every hosted surface's renderer against a new source video —
+    /// the user picked a different wallpaper in LiveWall.app while a surface
+    /// (desktop and/or Lock Screen) was already live. Signaled via Darwin
+    /// notification, not XPC — WallpaperAgent never asked us to reload, so
+    /// there's no `acquire` to reply to; we just swap the layer tree's
+    /// contents under the same, still-live remote CAContext. See
+    /// VideoSourceWatcher.swift.
+    func reloadAllRenderers(videoURL: URL) {
+        let snapshot = lock.withLock { $0.contexts }
+        for (uuid, wallpaper) in snapshot {
+            wallpaper.renderer?.stop()
+            Task {
+                guard let renderer = try? await VideoRenderer.create(rootLayer: wallpaper.rootLayer, videoURL: videoURL, stillImage: nil) else {
+                    log("  [reload] renderer create failed for uuid=\(uuid)")
+                    return
+                }
+                setRenderer(renderer, for: uuid)
+                renderer.start()
+                PlaybackPolicy.shared.apply(to: renderer)
+            }
+        }
+    }
+
     /// Tear down only the ONE surface identified by `uuid` — never the whole
     /// dictionary. This is what stops a preview probe's invalidate from killing
     /// the live desktop.

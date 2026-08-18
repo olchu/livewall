@@ -34,6 +34,7 @@ final class VideoRenderer: @unchecked Sendable {
 
     private var currentReader: AVAssetReader?
     private var currentOutput: AVAssetReaderTrackOutput?
+    private var isPaused = false
 
     // Gapless-ish looping: offset accumulates across loops so PTS/DTS stay
     // monotonically increasing instead of resetting to 0 (which would make the
@@ -154,6 +155,46 @@ final class VideoRenderer: @unchecked Sendable {
         }
         displayLayer.removeFromSuperlayer()
         stillFrameLayer.removeFromSuperlayer()
+    }
+
+    /// Freeze on the current frame and stop decoding — unlike `stop()`, the
+    /// layer tree and remote CAContext stay live so `resume()` can pick back up
+    /// without WallpaperAgent seeing a black flash or re-`acquire`.
+    func pause() {
+        queue.async { [weak self] in
+            guard let self, isRunning, !isPaused else { return }
+            isPaused = true
+            renderer.stopRequestingMediaData()
+            currentReader?.cancelReading()
+            currentReader = nil
+            currentOutput = nil
+            CMTimebaseSetRate(timebase, rate: 0.0)
+            log("  [Renderer #\(debugID)] paused")
+        }
+    }
+
+    /// Resume after `pause()`. Restarts decoding from a fresh reader at the
+    /// paused timeline position, same as a normal loop restart.
+    func resume() {
+        queue.async { [weak self] in
+            guard let self, isRunning, isPaused else { return }
+            isPaused = false
+            ptsOffset = lastEnqueuedEnd
+            guard let reader = try? AVAssetReader(asset: asset) else {
+                log("  [Renderer #\(debugID)] failed to create reader for resume")
+                isPaused = true
+                return
+            }
+            let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
+            output.alwaysCopiesSampleData = false
+            reader.add(output)
+            reader.startReading()
+            currentReader = reader
+            currentOutput = output
+            CMTimebaseSetRate(timebase, rate: 1.0)
+            log("  [Renderer #\(debugID)] resumed")
+            feedFromCurrentReader()
+        }
     }
 
     private static func setDisplayImmediately(_ sample: CMSampleBuffer) {

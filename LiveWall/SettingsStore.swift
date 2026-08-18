@@ -15,6 +15,14 @@ final class SettingsStore: ObservableObject {
     private let sharedWallpaperBookmarkKey = "com.ochurkin.LiveWall.sharedWallpaperBookmark"
     private let sharedWallpaperPathKey = "com.ochurkin.LiveWall.sharedWallpaperPath"
 
+    /// Darwin notification name the wallpaper extension listens for (see
+    /// LiveWallWallpaperExtension/VideoSourceWatcher.swift) to hot-swap its
+    /// renderers without waiting for WallpaperAgent to re-`acquire`. Darwin
+    /// notifications cross the sandbox boundary with no entitlement needed —
+    /// this is the only signal the app sends the extension; it never talks to
+    /// a running LiveWall.app to get its state.
+    private static let wallpaperChangedNotification = "com.ochurkin.LiveWall.wallpaperChanged" as CFString
+
     // Active security-scoped access token — must be stopped before app quits
     private var accessingURL: URL?
 
@@ -44,7 +52,7 @@ final class SettingsStore: ObservableObject {
         if let bookmark {
             defaults.set(bookmark, forKey: bookmarkKey)
         }
-        publishSharedWallpaperURL(url, bookmark: bookmark)
+        publishSharedWallpaperURL(url, bookmark: bookmark, notifyExtension: true)
     }
 
     /// Resolves the stored bookmark and begins access. Call on app launch.
@@ -70,7 +78,10 @@ final class SettingsStore: ObservableObject {
         _ = url.startAccessingSecurityScopedResource()
         accessingURL = url
         settings.wallpaperURL = url
-        publishSharedWallpaperURL(url, bookmark: data)
+        // notifyExtension: false — this runs on every launch just to restore
+        // bookmark access; nothing actually changed, so don't hot-swap a
+        // renderer that's already showing the right video.
+        publishSharedWallpaperURL(url, bookmark: data, notifyExtension: false)
         return url
     }
 
@@ -87,17 +98,18 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    private func publishSharedWallpaperURL(_ url: URL, bookmark: Data?) {
+    private func publishSharedWallpaperURL(_ url: URL, bookmark: Data?, notifyExtension: Bool) {
         if let bookmark {
             sharedDefaults?.set(bookmark, forKey: sharedWallpaperBookmarkKey)
         }
         sharedDefaults?.set(url.path, forKey: sharedWallpaperPathKey)
-        copyToGroupContainer(url)
+        copyToGroupContainer(url, notifyExtension: notifyExtension)
     }
 
-    // Copies the video into ~/Movies/LiveWall/ so the legacyScreenSaver process
-    // can read it via its container's Movies symlink (no entitlement needed there).
-    private func copyToGroupContainer(_ url: URL) {
+    // Copies the video into ~/Movies/LiveWall/ so the legacy .saver bundle and
+    // the wallpaper extension (both sandboxed, separate containers) can read
+    // it via their read-only temporary-exception entitlements.
+    private func copyToGroupContainer(_ url: URL, notifyExtension: Bool) {
         let fm = FileManager.default
         guard let moviesURL = fm.urls(for: .moviesDirectory, in: .userDomainMask).first else { return }
         let liveWallDir = moviesURL.appendingPathComponent("LiveWall", isDirectory: true)
@@ -118,8 +130,15 @@ final class SettingsStore: ObservableObject {
                 }
                 try? fm.removeItem(at: destURL)
                 try fm.copyItem(at: url, to: destURL)
+                if notifyExtension {
+                    CFNotificationCenterPostNotification(
+                        CFNotificationCenterGetDarwinNotifyCenter(),
+                        CFNotificationName(Self.wallpaperChangedNotification),
+                        nil, nil, true
+                    )
+                }
             } catch {
-                // Best-effort: screensaver falls back to showing nothing
+                // Best-effort: screensaver/extension falls back to showing nothing
             }
         }
     }

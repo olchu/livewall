@@ -5,15 +5,9 @@ import UniformTypeIdentifiers
 
 final class MenuBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
-    private weak var manager: WallpaperWindowManaging?
-    private weak var coordinator: PlaybackCoordinator?
     private let settings: SettingsStore
     private let performance = PerformanceMonitor()
 
-    private weak var pauseMenuItem: NSMenuItem?
-    private weak var pauseOnBatteryItem: NSMenuItem?
-    private weak var pauseOnFullscreenItem: NSMenuItem?
-    private weak var pauseOnLockItem: NSMenuItem?
     private weak var startAtLoginItem: NSMenuItem?
     private weak var cpuMenuItem: NSMenuItem?
     private weak var ramMenuItem: NSMenuItem?
@@ -24,12 +18,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let notificationCenter = UNUserNotificationCenter.current()
     private let loginItemManager = LoginItemManager.shared
 
-    init(manager: WallpaperWindowManaging,
-         coordinator: PlaybackCoordinator,
-         settings: SettingsStore = .shared) {
-        self.manager     = manager
-        self.coordinator = coordinator
-        self.settings    = settings
+    init(settings: SettingsStore = .shared) {
+        self.settings = settings
         super.init()
         requestNotificationPermission()
         setupStatusItem()
@@ -80,20 +70,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self?.selectWallpaper()
         }
 
-        // Pause / Resume
-        let pauseItem = NSMenuItem(title: "Pause", action: #selector(togglePause), keyEquivalent: "")
-        pauseItem.target = self
-        pauseMenuItem = pauseItem
-        menu.addItem(pauseItem)
-
-        menu.addItem(.separator())
-
-        // Behaviour toggles
-        pauseOnBatteryItem   = addToggle(to: menu, title: "Pause on Battery",       action: #selector(toggleBattery),    state: settings.settings.pauseOnBattery)
-        pauseOnFullscreenItem = addToggle(to: menu, title: "Pause on Fullscreen App", action: #selector(toggleFullscreen), state: settings.settings.pauseWhenFullscreen)
-        pauseOnLockItem      = addToggle(to: menu, title: "Pause on Screen Lock",    action: #selector(toggleLock),       state: settings.settings.pauseWhenLocked)
-
-        menu.addItem(.separator())
         startAtLoginItem = addToggle(to: menu, title: "Start at Login", action: #selector(toggleStartAtLogin), state: settings.settings.startAtLogin)
         menu.addItem(.separator())
         menu.addItem(makeSettingsMenuItem())
@@ -146,9 +122,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
-        pauseOnBatteryItem?.state    = settings.settings.pauseOnBattery      ? .on : .off
-        pauseOnFullscreenItem?.state = settings.settings.pauseWhenFullscreen  ? .on : .off
-        pauseOnLockItem?.state       = settings.settings.pauseWhenLocked      ? .on : .off
         startAtLoginItem?.state      = loginItemManager.syncSettingsState(settings) ? .on : .off
 
         let snap = performance.snapshot()
@@ -265,8 +238,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func applyWallpaper(_ url: URL) {
         settings.setWallpaperURL(url)
-        DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
-        manager?.reloadWallpaper()
     }
 
     private func requestNotificationPermission() {
@@ -301,26 +272,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func openSettings() {
         SettingsWindowPresenter.openSettings()
-    }
-
-    @objc private func togglePause() {
-        coordinator?.toggleUserPause()
-        pauseMenuItem?.title = coordinator?.isUserPaused == true ? "Resume" : "Pause"
-    }
-
-    @objc private func toggleBattery() {
-        settings.settings.pauseOnBattery.toggle()
-        pauseOnBatteryItem?.state = settings.settings.pauseOnBattery ? .on : .off
-    }
-
-    @objc private func toggleFullscreen() {
-        settings.settings.pauseWhenFullscreen.toggle()
-        pauseOnFullscreenItem?.state = settings.settings.pauseWhenFullscreen ? .on : .off
-    }
-
-    @objc private func toggleLock() {
-        settings.settings.pauseWhenLocked.toggle()
-        pauseOnLockItem?.state = settings.settings.pauseWhenLocked ? .on : .off
     }
 
     @objc private func toggleStartAtLogin() {

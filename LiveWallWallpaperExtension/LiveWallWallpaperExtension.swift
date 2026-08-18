@@ -22,6 +22,9 @@ final class LiveWallWallpaperExtension: NSObject, AppExtension {
             let err = String(cString: dlerror())
             log("INIT (PID: \(ProcessInfo.processInfo.processIdentifier)) — dlopen failed: \(err)")
         }
+
+        PlaybackPolicy.shared.start()
+        VideoSourceWatcher.start()
     }
 
     /// Read-only smoke test: confirms the private classes this extension will

@@ -132,6 +132,7 @@ final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             WallpaperState.shared.setRenderer(renderer, for: uuid)
             renderer.start(onFirstFrameReady: {
                 reply(replyObj, nil)
+                PlaybackPolicy.shared.apply(to: renderer)
             })
         }
     }

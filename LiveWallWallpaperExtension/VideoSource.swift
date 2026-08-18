@@ -26,12 +26,16 @@ enum VideoSource {
 
     /// Generate (or reuse a cached) JPEG thumbnail for the current video, in the
     /// extension's own sandbox container so WallpaperAgent's Settings picker can
-    /// read it via the choice's declared `files`.
+    /// read it via the choice's declared `files`. Cache reuse is keyed on the
+    /// thumbnail simply existing — `VideoSourceWatcher` deletes it explicitly
+    /// whenever the user picks a different video, which is the only event that
+    /// should invalidate it. (An earlier version compared mtimes instead, but
+    /// `SettingsStore`'s `copyItem` preserves the *source* video's original
+    /// modification date — an older video copied in after a newer cached
+    /// thumbnail already existed would keep the stale thumbnail forever.)
     static func generateThumbnail() async -> URL? {
         guard let videoURL else { return nil }
-        if let existing = try? FileManager.default.attributesOfItem(atPath: thumbnailURL.path)[.modificationDate] as? Date,
-           let source = try? FileManager.default.attributesOfItem(atPath: videoURL.path)[.modificationDate] as? Date,
-           existing > source {
+        if FileManager.default.fileExists(atPath: thumbnailURL.path) {
             return thumbnailURL
         }
 
@@ -54,5 +58,13 @@ enum VideoSource {
         CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return thumbnailURL
+    }
+
+    /// Drop the cached thumbnail so the next `generateThumbnail()` call
+    /// regenerates from the current video instead of reusing stale content.
+    /// Called by `VideoSourceWatcher` whenever the user picks a different
+    /// video.
+    static func invalidateThumbnailCache() {
+        try? FileManager.default.removeItem(at: thumbnailURL)
     }
 }

@@ -1,51 +1,25 @@
 import AppKit
 
+/// LiveWall.app is a configurator, not a player: it picks a video and writes
+/// it where the `com.apple.wallpaper` ExtensionKit extension can read it
+/// (see LiveWallWallpaperExtension/VideoSource.swift). Actual playback — both
+/// desktop and Lock Screen — is owned entirely by WallpaperAgent hosting that
+/// extension, and keeps running whether or not this app is open. The app
+/// must not render anything itself.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
-    private var wallpaperManager: WallpaperWindowManager?
-    private var playbackCoordinator: PlaybackCoordinator?
-    private var systemEventMonitor: SystemEventMonitor?
     private let settings: SettingsStore = .shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        let manager = WallpaperWindowManager()
-        let coordinator = PlaybackCoordinator(manager: manager)
-        wallpaperManager = manager
-        playbackCoordinator = coordinator
-        menuBarController = MenuBarController(manager: manager, coordinator: coordinator)
+        menuBarController = MenuBarController()
         LoginItemManager.shared.syncSettingsState(settings)
 
-        if let url = settings.resolveAndStartAccessingWallpaper() {
-            DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
-        }
-        manager.setupWallpaperWindows()
-
-        coordinator.start()
-
-        systemEventMonitor = SystemEventMonitor(coordinator: coordinator)
-        systemEventMonitor?.start()
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(displaysChanged),
-            name: NSApplication.didChangeScreenParametersNotification,
-            object: nil
-        )
+        _ = settings.resolveAndStartAccessingWallpaper()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        systemEventMonitor?.stop()
-        playbackCoordinator?.stop()
-        wallpaperManager?.destroyWallpaperWindows()
         settings.stopAccessingWallpaper()
-    }
-
-    @objc private func displaysChanged() {
-        if let url = settings.settings.wallpaperURL {
-            DesktopWallpaperSync.syncDesktopPicture(withVideoAt: url)
-        }
-        wallpaperManager?.handleDisplayChange()
     }
 }

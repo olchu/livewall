@@ -40,12 +40,6 @@ LiveWall Lite
 [Preview thumbnail]          ✅ video first frame, 280×100, rounded top corners
   [Select Wallpaper… button] ✅ ghost button centered on preview, opens file picker
 ────────────────
-Pause / Resume              ✅
-────────────────
-Pause on Battery            ✅ PlaybackCoordinator + PowerModeMonitor
-Pause on Fullscreen App     ✅ PlaybackCoordinator + FullscreenAppMonitor
-Pause on Screen Lock        ✅ PlaybackCoordinator + DistributedNotificationCenter
-────────────────
 Start at Login: On/Off      ✅ `LoginItemManager` + `SMAppService`
 Settings...                 ✅ SwiftUI Settings scene (⌘,)
 Quit                        ✅
@@ -55,12 +49,18 @@ RAM:  87 MB                 ✅ PerformanceMonitor
 GPU:  ~45 MB (device)       ✅ PerformanceMonitor
 ```
 
+**The app is a configurator, not a player** (see §3.5): there is no Pause/Resume and no
+"Pause on Battery/Fullscreen/Screen Lock" — those toggles paused the app's own desktop
+overlay, which was retired once the `com.apple.wallpaper` extension proved it could render
+both desktop and Lock Screen on its own (v0.7/v0.8 cutover). CPU/RAM/GPU now reflect this
+app's own near-idle footprint, not video playback cost — that cost moved into `WallpaperAgent`
+hosting the extension and isn't attributable per-process from here.
+
 Performance metrics notes:
 - CPU — per-process, via `mach` `task_threads` + `thread_basic_info`
 - RAM — per-process physical footprint, via `task_vm_info` (`phys_footprint`)
 - GPU — `MTLDevice.currentAllocatedSize` (device-wide, not per-process; sandbox limitation)
 - Metrics update only when menu is open (`NSMenuDelegate`) — no background polling
-- Fullscreen detection requires Screen Recording permission (macOS 10.15+); gracefully disabled without it
 
 Requirements:
 - ✅ no Dock icon (`LSUIElement = YES` + `.accessory` activation policy)
@@ -90,25 +90,24 @@ Optional optimizer:
 
 ---
 
-### 3.3 Wallpaper Rendering ✅
+### 3.3 Wallpaper Rendering — retired app-side approach ❌ superseded by §3.5
 
-| Requirement | Status |
-|---|---|
-| borderless fullscreen-sized window | ✅ `NSWindow.makeWallpaperWindow(screen:)` factory |
-| below desktop icons | ✅ `CGWindowLevelForKey(.desktopWindow)` |
-| ignores mouse events | ✅ |
-| not focusable / non-activating | ✅ |
-| stays behind Finder | ✅ |
-| survive sleep/wake | ✅ `SystemEventMonitor` → `PlaybackCoordinator.handleWake()` |
-| multiple monitors | ✅ `WallpaperWindowManager` iterates `NSScreen.screens` |
-| menu bar contrast sync | ✅ first video frame saved as desktop picture via `DesktopWallpaperSync` |
+Through v0.6, LiveWall rendered its own borderless `NSWindow` per `NSScreen` at
+`CGWindowLevelForKey(.desktopWindow)`, playing video via `AVPlayerLayer`
+(`WallpaperWindowManager`/`WallpaperWindow`/`VideoWallpaperView`), and synced a static
+still frame as the real desktop picture (`DesktopWallpaperSync`) so the system menu bar
+picked correct contrast from it. This required `LiveWall.app` to be running at all times.
 
-macOS chooses menu bar text color and top-bar material from the system desktop picture,
-not from the custom desktop-level video window. When a video wallpaper is selected or
-restored, LiveWall extracts a still frame and sets it as the real desktop picture first,
-then renders the animated wallpaper above it. Preview images are written to unique
-Application Support URLs so macOS refreshes cached desktop / lock-screen imagery
-when a different video is selected.
+**Retired in the v0.7/v0.8 cutover** once §3.5's `com.apple.wallpaper` ExtensionKit
+extension was confirmed to render the same video on both the desktop and Lock Screen via
+`WallpaperAgent` — including with `LiveWall.app` fully quit. Keeping both paths running
+risked exactly the two-renderers-fighting-over-one-desktop class of bug this project has
+already hit once (v0.6.1). `WallpaperWindowManager`, `WallpaperWindow`, `VideoWallpaperView`,
+`WallpaperWindowManaging`, `VideoPlayback`, `PlaybackCoordinator`, `SystemEventMonitor`,
+`PowerModeMonitor`, `FullscreenAppMonitor`, and `DesktopWallpaperSync` were deleted from the
+`LiveWall` target. `AppDelegate` now only starts the menu bar and resolves the security-scoped
+bookmark for the preview thumbnail — it creates no window and renders nothing. See §3.5 and
+§7 for the current architecture.
 
 ---
 
@@ -165,19 +164,20 @@ own hack directly causes by corrupting a signed asset out from under macOS.
 | Settings view model (choice shown in the picker) | ✅ `WallpaperSettingsProvider.swift` + `CodableShims.swift` — built via the **safe** `NSKeyedArchiver`/`setClass(forClassName:)` remap technique (no raw memory writes; a field mismatch fails to decode, doesn't corrupt anything) |
 | Single fixed video source (`~/Movies/LiveWall/wallpaper.<ext>`) | ✅ `VideoSource.swift` — MVP scope; no multi-video library yet (Phosphene's `VideoLibrary`) |
 | Snapshot generation for Lock Screen transitions (`WallpaperSnapshotXPC`) | ⏳ stub (`nil` reply) — Settings picker preview may lag the static thumbnail during transitions |
-| `PlaybackPolicy` (thermal/battery/presentation-mode aware pause/resume) | ⏳ not started — renderer always plays once started, no pause on battery/fullscreen/lock parity with the desktop overlay yet |
+| `PlaybackPolicy` (thermal/battery/presentation-mode aware pause/resume) | 🔄 `PlaybackPolicy.swift` — thermal-state pause/resume done (pauses on `.serious`/`.critical`, resumes on clear, syncs newly-acquired renderers to current state); battery and presentationMode axes deferred (see below) |
 | Spiral-of-death detection + `WallpaperAgent` auto-restart | ⏳ not started |
 | Legacy `.saver` bundle (macOS 13–15 fallback) | ✅ kept as-is, unaffected by this work |
+| Hot-reload on wallpaper change (no re-`acquire` needed) | ✅ `VideoSourceWatcher.swift` + `WallpaperState.reloadAllRenderers` — Darwin notification from `SettingsStore`, no App Group |
 
 **Known MVP limitations** (deliberate scope cuts, not bugs): single video only,
 no adaptive quality tiers, loop restart is a fresh `AVAssetReader` (not Phosphene's
 preloaded dual-reader — a loop boundary may have a tiny hitch), no pause on
 battery/fullscreen/lock (Phase 4), teardown grace timer is 15s flat (not tuned).
 
-Old `LockScreenWallpaperManager` / `SettingsView` "Lock Screen" section (the
-abandoned approach) — ⏳ still present, should be removed once the extension path
-is confirmed stable over longer/normal use, to prevent accidentally re-triggering
-the old bug.
+Old `LockScreenWallpaperManager` (the abandoned Aerial-substitution approach) and the
+`SettingsView` "Lock Screen" section that called it — ✅ removed (deleted from
+`OptimizedVideoExporter.swift` and `SettingsView.swift`) in the same pass that retired
+the app-side desktop overlay (§3.3). It can no longer be triggered.
 
 #### Phased plan
 
@@ -228,46 +228,78 @@ land these behind explicit bounds checks that fail closed (as Phosphene does), a
 validate on-device before considering this phase done; a wrong offset writes into
 `WallpaperAgent`'s memory.
 
-**Phase 4 — Resilience**
+**Phase 4 — Resilience (🔄 in progress)**
 `PlaybackPolicy` (battery/thermal/presentation-mode), spiral-of-death detection +
 auto-restart, multi-display/per-Space selection, pause-when-occluded.
+
+Thermal-state pause/resume done: `PlaybackPolicy.swift` observes
+`ProcessInfo.thermalStateDidChangeNotification` and pauses every hosted
+renderer (`VideoRenderer.pause()`/`resume()` — freezes the current frame via
+`CMTimebaseSetRate(rate: 0)`, tears down only the `AVAssetReader`, keeps the
+remote `CAContext`/layer tree live so resuming never re-triggers `acquire`)
+on `.serious`/`.critical`, resumes on `.fair`/`.nominal`. A renderer created
+mid-throttle (fresh `acquire`) is synced to the current decision right after
+its first frame so it doesn't briefly play before the next notification.
+Lives entirely inside the extension process — no dependency on `LiveWall.app`
+running, same as the rest of this extension.
+
+Deferred within this phase:
+- **battery-aware pause** — the extension has no App Group entitlement to
+  read `LiveWall.app`'s `pauseOnBattery` setting (separate sandbox
+  containers). Pausing unconditionally on battery would silently diverge
+  from that toggle's default (`false`). A minimal self-contained
+  `PowerSourceObserver` (same IOKit approach as the app's
+  `PowerModeMonitor`) already exists in `PlaybackPolicy.swift`, unwired,
+  ready for once an App Group lands.
+- **presentationMode-aware pause** — `update`'s request carries a
+  presentationMode enum case name (`WallpaperXPCHandler.update`), but its
+  real values (idle/lock/screensaver/etc.) are unknown without on-device
+  capture. Guessing risks pausing on the wrong signal.
+- spiral-of-death detection + auto-restart, multi-display/per-Space
+  selection, pause-when-occluded — not started.
 
 **Phase 5 — UX + cleanup**
 Settings UI to manage the extension's video library. Remove the abandoned
 `LockScreenWallpaperManager`/Aerial-substitution code and its Settings section.
 
-#### Expected user flow (once complete)
+#### Expected user flow (✅ current behavior)
 
-1. User selects a video in LiveWall.
-2. LiveWall's (unsandboxed) menu bar app writes it into the extension's sandbox
-   container and signals the change via Darwin notification.
+1. User selects a video in LiveWall (menu bar → "Select Wallpaper…").
+2. `SettingsStore` copies it to `~/Movies/LiveWall/wallpaper.<ext>` (readable by the
+   extension via its read-only temporary-exception entitlement) and posts a Darwin
+   notification (`com.ochurkin.LiveWall.wallpaperChanged`) — no App Group, no live IPC
+   round-trip to the app, just a fire-and-forget signal. `VideoSourceWatcher` in the
+   extension observes it and hot-swaps every currently hosted renderer
+   (`WallpaperState.reloadAllRenderers`) in place, without waiting for WallpaperAgent to
+   re-`acquire`.
 3. User picks "LiveWall" as their wallpaper/Lock Screen source in System Settings →
-   Wallpaper, exactly like picking a built-in Aerial.
+   Wallpaper, exactly like picking a built-in Aerial. This is a one-time step — it
+   persists in macOS's own wallpaper configuration, not in anything LiveWall owns.
 4. macOS renders the video during idle/Lock Screen via the extension running inside
-   `WallpaperAgent`; LiveWall's desktop `WallpaperWindow` remains paused while the
-   session is locked (unchanged from today).
+   `WallpaperAgent`, entirely independent of `LiveWall.app`'s process lifetime — quitting
+   the app does not stop or pause playback.
+
+`LiveWall.app`'s only job past this point is steps 1–2: pick a video, write it, signal
+the extension. It never renders anything itself (§3.3).
 
 ---
 
-### 3.4 Video Playback ✅
+### 3.4 Video Playback — owned by the extension's `VideoRenderer` (see §3.5)
 
 | Requirement | Status |
 |---|---|
-| infinite loop | ✅ `AVQueuePlayer` + `AVPlayerLooper` |
-| hardware accelerated decoding | ✅ `AVPlayerLayer` |
-| muted | ✅ `player.isMuted = true` |
-| pause/resume | ✅ |
-| display modes: Fill / Fit / Center | ✅ Settings UI updates `AVPlayerLayer.videoGravity` |
-| crossfade loop transition (smooth mix) | ✅ `VideoWallpaperView` dual-player mode |
-| crossfade duration: 0.5–5.0 s, clamped to ≤ 50% of video duration | ✅ Settings UI slider |
-| video duration detection (guard: transition safe) | ✅ `AVURLAsset.load(.duration)` async |
+| infinite loop | ✅ `VideoRenderer` — fresh `AVAssetReader` per loop, PTS/DTS offset kept monotonic |
+| hardware accelerated decoding | ✅ `AVAssetReader` + `AVSampleBufferDisplayLayer` |
+| muted | ✅ no audio track is read |
+| pause/resume | ✅ `VideoRenderer.pause()`/`resume()` — thermal-triggered (§3.5 Phase 4); no user-facing toggle |
+| display modes: Fill / Fit / Center | ❌ removed — `VideoRenderer` hardcodes `.resizeAspectFill`; no per-mode UI in `SettingsView` anymore |
+| crossfade loop transition (smooth mix) | ❌ not carried over — v0.6's dual-`AVPlayerLayer` crossfade lived in the retired `VideoWallpaperView` (§3.3); `VideoRenderer`'s loop restart has a small hitch at the boundary instead (documented MVP limitation, §3.5) |
 
-**Crossfade implementation (v0.6):**  
-When enabled, `VideoWallpaperView` switches to dual-player mode instead of `AVPlayerLooper`.  
-Two `AVPlayer` + two `AVPlayerLayer` (layerA opacity=1, layerB opacity=0) play the same URL.  
-A boundary time observer on the active player fires at `currentDuration − crossfadeDuration`.  
-At that point: standby player seeks to 0 and plays; `CATransaction` animates opacity swap over `crossfadeDuration` seconds.  
-After transition completes: old active player pauses and seeks to 0; roles swap; new boundary observer is registered on the now-active player.
+Crossfade and display-mode selection were **app-side `VideoWallpaperView` features that did
+not carry over** when rendering moved to the extension (§3.3) — `VideoRenderer` is a Phase 3
+MVP renderer (single video, `AVSampleBufferDisplayLayer`-driven) with neither. Re-adding
+either would mean building them into `VideoRenderer` itself; not currently planned — see
+§14 if revisited.
 
 ---
 
@@ -275,17 +307,16 @@ After transition completes: old active player pauses and seeks to 0; roles swap;
 
 ### 4.1 AppSettings ✅
 
+Trimmed to just the two fields that still mean something once the app doesn't render
+(§3.3): `playbackMode`, `pauseOnBattery`, `pauseWhenFullscreen`, `pauseWhenLocked`,
+`crossfadeEnabled`, `crossfadeDuration`, and `batterySaverEnabled` were all removed —
+each one only ever configured a now-deleted app-side component, and had no reader
+left anywhere in the codebase.
+
 | Field | Type | Status |
 |---|---|---|
 | `wallpaperURL` | `URL?` | ✅ persisted via security-scoped bookmark |
-| `playbackMode` | `PlaybackMode` | ✅ |
 | `startAtLogin` | `Bool` | ✅ `LoginItemManager` + `SMAppService` |
-| `batterySaverEnabled` | `Bool` | ✅ toggled via menu |
-| `pauseOnBattery` | `Bool` | ✅ `PowerModeMonitor` + `PlaybackCoordinator` |
-| `pauseWhenFullscreen` | `Bool` | ✅ `FullscreenAppMonitor` + `PlaybackCoordinator` |
-| `pauseWhenLocked` | `Bool` | ✅ `DistributedNotificationCenter` + `PlaybackCoordinator` |
-| `crossfadeEnabled` | `Bool` (default `false`) | ✅ |
-| `crossfadeDuration` | `Double` seconds (default `1.5`, range `0.5–5.0`) | ✅ |
 
 Persistence: ✅ `UserDefaults` via `SettingsStore`
 
@@ -307,162 +338,121 @@ Electron, WebView, GIF, HTML/CSS wallpapers, polling loops, 4K unoptimized, 60 F
 
 ### 5.3 Required Optimizations
 
+Ownership moved to the extension's `VideoRenderer` (§3.5) — the app-side optimizations
+this table used to list (`AVPlayerLayer`, `SystemEventMonitor`/`PlaybackCoordinator`
+sleep/lock/fullscreen/battery pause) no longer apply because the app doesn't render.
+
 | Optimization | Status |
 |---|---|
-| `AVPlayerLayer` | ✅ |
-| Hardware video decoding | ✅ |
-| Lazy loading | ✅ load only when URL provided |
-| Pause during sleep | ✅ `SystemEventMonitor` → `PlaybackCoordinator` |
-| Pause during lock screen | ✅ `PlaybackCoordinator` + `com.apple.screenIsLocked` |
-| Pause on fullscreen app | ✅ `FullscreenAppMonitor` (requires Screen Recording permission) |
-| Battery-aware behavior | ✅ `PowerModeMonitor` (IOKit, no polling) |
-| `CATransaction.disableActions` on resize | ✅ `VideoWallpaperView.layout()` |
-| `drawsAsynchronously` on playerLayer | ✅ |
-| Optimized local video copy | ✅ `OptimizedVideoExporter` via AVFoundation export presets |
+| Hardware video decoding | ✅ `AVAssetReader` + `AVSampleBufferDisplayLayer` (`VideoRenderer`) |
+| Lazy loading | ✅ renderer created only on `acquire`, once a frame is composited |
+| Pause under thermal pressure | ✅ `PlaybackPolicy` (§3.5 Phase 4) |
+| Pause on battery / fullscreen / lock | ⏳ deferred — see §3.5 Phase 4 |
+| `CATransaction.disableActions` on layer updates | ✅ `VideoRenderer.resize(to:scale:)` |
+| Optimized local video copy | ✅ `OptimizedVideoExporter` via AVFoundation export presets (unchanged, app-side) |
 
 ---
 
 ## 6. System Event Handling
 
+The app no longer handles any of these — it isn't rendering, so there's nothing in it to
+pause or resume. Everything below is now `WallpaperAgent`'s responsibility as host of the
+extension (§3.5); LiveWall only reacts to the subset `PlaybackPolicy` explicitly implements.
+
 | Event | Status |
 |---|---|
-| system sleep / wake | ✅ `SystemEventMonitor` → `PlaybackCoordinator.handleSleep/Wake` |
-| screen sleep / wake | ✅ `SystemEventMonitor` → `PlaybackCoordinator.handleScreenSleep/Wake` |
-| screen lock / unlock | ✅ `PlaybackCoordinator` via `com.apple.screenIsLocked` distributed notification |
-| monitor connected / disconnected | ✅ `didChangeScreenParametersNotification` |
-| display layout changes | ✅ `handleDisplayChange()` |
-| fullscreen app open / close | ✅ `FullscreenAppMonitor` (NSWorkspace + CGWindowList) |
-| power adapter changes | ✅ `PowerModeMonitor` (IOPSNotificationCreateRunLoopSource) |
+| system sleep / wake | owned by `WallpaperAgent`, not LiveWall |
+| screen sleep / wake | owned by `WallpaperAgent`, not LiveWall |
+| screen lock / unlock | owned by `WallpaperAgent`, not LiveWall (renders through Lock Screen itself, §3.5) |
+| monitor connected / disconnected | owned by `WallpaperAgent` — each surface re-`acquire`s with new `destSize`/`scaleFactor` |
+| thermal pressure | ✅ `PlaybackPolicy` — pause/resume on `.serious`/`.critical` (§3.5 Phase 4) |
+| fullscreen app open / close | ⏳ deferred — see §3.5 Phase 4 |
+| power adapter changes | ⏳ deferred — see §3.5 Phase 4 |
 
 ---
 
 ## 7. Architecture ✅
 
+Two independent processes, two targets. The app never renders (§3.3); the extension owns
+all playback and keeps running with the app fully quit (§3.5).
+
 ```
-LiveWallLiteApp                   ✅ LiveWallApp.swift
+LiveWall.app                      ✅ configurator only — picks a video, writes it, signals
+│                                     the extension. Renders nothing.
 │
-├── AppDelegate                   ✅ AppDelegate.swift
-│   ├── lifecycle
-│   ├── notifications
-│   └── startup logic
-│
-├── MenuBarController             ✅ MenuBarController.swift
-│   ├── NSStatusItem
-│   └── menu actions + toggles
-│
-├── PlaybackCoordinator           ✅ PlaybackCoordinator.swift
-│   ├── aggregates all pause conditions
-│   ├── user pause / battery / fullscreen / lock / sleep
-│   └── single source of truth for playback state
-│
-├── WallpaperWindowManager        ✅ WallpaperWindowManager.swift
-│   ├── create windows
-│   ├── destroy windows
-│   ├── reload wallpapers
-│   └── monitor changes
-│
-├── WallpaperWindow               ✅ WallpaperWindow.swift
-│   └── NSWindow factory extension (macOS 26 compat)
-│
-├── VideoWallpaperView            ✅ VideoWallpaperView.swift
-│   ├── looper mode: AVQueuePlayer + AVPlayerLooper (default)
-│   ├── crossfade mode: dual AVPlayer + dual AVPlayerLayer (v0.6)
-│   ├── boundary time observer → opacity swap via CATransaction
-│   └── setCrossfade(enabled:duration:) reloads into correct mode
-│
-├── DesktopWallpaperSync          ✅ DesktopWallpaperSync.swift
-│   ├── extracts preview frame with AVAssetImageGenerator
-│   ├── stores unique cached JPG previews in Application Support
-│   └── sets NSWorkspace desktop picture for menu bar contrast
-│
-├── OptimizedVideoExporter        ✅ OptimizedVideoExporter.swift
-│   ├── creates lower-cost playback copies via AVAssetExportSession
-│   ├── stores files in Application Support / OptimizedWallpapers
-│   └── leaves source video unchanged
-│
-├── PerformanceMonitor            ✅ PerformanceMonitor.swift
-│   ├── CPU (per-process, mach task_threads)
-│   ├── RAM (phys_footprint)
-│   └── GPU (MTLDevice.currentAllocatedSize)
-│
+├── LiveWallApp                   ✅ LiveWallApp.swift — @main, Settings scene
+├── AppDelegate                   ✅ AppDelegate.swift — starts MenuBarController only
+├── MenuBarController             ✅ MenuBarController.swift — NSStatusItem, Select/Settings/Quit
+├── SettingsView / SettingsWindowPresenter  ✅ SwiftUI Settings window
 ├── SettingsStore                 ✅ SettingsStore.swift
-│   └── UserDefaults + security-scoped bookmarks
+│   ├── UserDefaults + security-scoped bookmarks
+│   ├── copies picked video to ~/Movies/LiveWall/wallpaper.<ext>
+│   └── posts com.ochurkin.LiveWall.wallpaperChanged (Darwin notification)
+├── AppSettings                   ✅ AppSettings.swift — wallpaperURL, startAtLogin
+├── OptimizedVideoExporter        ✅ optional 1080p/HEVC re-encode via AVAssetExportSession
+├── PerformanceMonitor            ✅ CPU/RAM/GPU of this process (near-idle by design)
+├── LoginItemManager              ✅ launch at login (SMAppService)
+└── ScreenSaverInstaller          ✅ installs the legacy .saver bundle (macOS 13–15 fallback)
+
+LiveWallWallpaperExtension.appex  ✅ com.apple.wallpaper ExtensionKit extension — all rendering,
+│                                     hosted inside WallpaperAgent (§3.5)
 │
-├── SystemEventMonitor            ✅ SystemEventMonitor.swift
-│   └── sleep/wake → PlaybackCoordinator
-│
-├── PowerModeMonitor              ✅ PowerModeMonitor.swift
-│   └── IOKit battery state, no polling
-│
-├── FullscreenAppMonitor          ✅ FullscreenAppMonitor.swift
-│   └── NSWorkspace + CGWindowList
-│
-├── LoginItemManager              ✅ LoginItemManager.swift
-│   └── launch at login
-│
-├── LockScreenWallpaperProvider  🔄 platform adapter
-│   ├── LegacyScreenSaverProvider ⏳ macOS 13–15
-│   ├── TahoeWallpaperProvider    ⏳ macOS 26+ feasibility spike
-│   └── UnsupportedProvider       ⏳ safe fallback
-│
-└── LiveWallScreenSaver           🔄 legacy compatibility path
-    ├── .saver bundle target      ✅ LiveWallScreenSaver
-    ├── ScreenSaverView subclass  ✅ LiveWallScreenSaverView
+├── LiveWallWallpaperExtension    ✅ entry point — dlopen + self-check, starts PlaybackPolicy
+│                                     and VideoSourceWatcher
+├── WallpaperExtensionConfig      ✅ accepts XPC from WallpaperAgent, caller-validated
+├── WallpaperXPCHandler           ✅ acquire/update/invalidate/snapshot/settings (~30 selectors)
+├── WallpaperState                ✅ per-surface CAContext registry, keyed by WallpaperID UUID
+├── VideoRenderer                 ✅ AVSampleBufferDisplayLayer + manual AVAssetReader,
+│                                     PTS-offset loop restart, pause()/resume()
+├── VideoSource                   ✅ reads ~/Movies/LiveWall/wallpaper.<ext>
+├── VideoSourceWatcher            ✅ Darwin notification → WallpaperState.reloadAllRenderers
+├── PlaybackPolicy                🔄 thermal-state pause/resume; battery/presentationMode deferred
+├── CallerValidation               ✅ SecCodeCheckValidity against Apple-signed WallpaperAgent
+├── RuntimeHelpers                 ✅ bounds-checked remote-context/snapshot XPC construction
+└── Logging                        ✅ file-based (unified log redacts sandboxed extension output)
+
+LiveWallScreenSaver.saver         🔄 legacy compatibility path, macOS 13–15 fallback
+    ├── .saver bundle target      ✅
+    ├── ScreenSaverView subclass  ✅
     ├── AVPlayer (muted, looping) ✅
-    └── reads managed copy from ~/Movies/LiveWall 🔄
+    └── reads the same ~/Movies/LiveWall copy ✅
 ```
 
 ---
 
 ## 8. Component Contracts
 
-### 8.1 WallpaperWindowManaging ✅
-```swift
-protocol WallpaperWindowManaging {
-    func setupWallpaperWindows()
-    func destroyWallpaperWindows()
-    func reloadWallpaper()
-    func pause()
-    func resume()
-    func handleDisplayChange()
-}
-```
+`WallpaperWindowManaging` and `VideoPlayback` (the app-side rendering protocols) were
+deleted along with the components that implemented them (§3.3) — there is no app-side
+rendering contract anymore. The extension's `VideoRenderer` (§3.5, §7) is a concrete class,
+not a protocol; its public surface is `start(onFirstFrameReady:)`, `pause()`, `resume()`,
+`resize(to:scale:)`, `stop()`.
 
-### 8.2 VideoPlayback ✅
-```swift
-protocol VideoPlayback {
-    func loadVideo(url: URL)
-    func play()
-    func pause()
-    func setGravity(_ mode: PlaybackMode)
-}
-```
-
-### 8.3 AppSettings ✅
+### 8.1 AppSettings ✅
 ```swift
 struct AppSettings: Codable {
     var wallpaperURL: URL?         // resolved from security-scoped bookmark via SettingsStore
-    var playbackMode: PlaybackMode
     var startAtLogin: Bool
-    var batterySaverEnabled: Bool
-    var pauseOnBattery: Bool
-    var pauseWhenFullscreen: Bool
-    var pauseWhenLocked: Bool
 }
 ```
 
 ---
 
-## 9. UX — First Launch ⏳ v0.4
+## 9. UX — First Launch ✅
 
 ```
-1. App launches in menu bar
-2. Settings are available from menu        ← v0.4
-3. User selects video wallpaper
-4. Wallpaper starts immediately
+1. App launches in menu bar, renders nothing
+2. User selects a video wallpaper from the menu
+3. LiveWall copies it to ~/Movies/LiveWall and signals the extension (§3.5)
+4. User picks "LiveWall" in System Settings → Wallpaper (one-time)
+5. macOS plays it — desktop and Lock Screen — via WallpaperAgent, independent
+   of whether LiveWall.app is still running
 ```
 
-Current behaviour (v0.3): app launches silently in menu bar, restores last wallpaper automatically, user selects video via menu. Pause conditions (battery/fullscreen/lock) configurable via menu toggles.
+Step 4 is the one manual step this flow still requires and LiveWall cannot skip it —
+System Settings is where macOS decides which wallpaper provider is active, exactly as for
+a built-in Aerial. Until it's done once, LiveWall has picked/copied a video but nothing is
+visibly rendered (no app-side fallback rendering exists anymore, §3.3).
 
 ---
 
@@ -477,8 +467,8 @@ Current behaviour (v0.3): app launches silently in menu bar, restores last wallp
 | **v0.5** | legacy `.saver` prototype; proved insufficient as the Tahoe primary path | 🔄 |
 | **v0.6** | crossfade loop transition — dual-player smooth mix with configurable duration | ✅ Done |
 | **v0.6.1** | Aerial-asset-substitution Lock Screen hack — shipped, caused black screen on wake, abandoned | ❌ Reverted |
-| **v0.7** | `com.apple.wallpaper` ExtensionKit target — skeleton registers + self-checks (Phase 1 of §3.5) | 🔄 |
-| **v0.8** | Wallpaper extension: XPC handler, rendering, resilience (Phases 2–4 of §3.5) | ⏳ |
+| **v0.7** | `com.apple.wallpaper` ExtensionKit target — skeleton, XPC, rendering MVP confirmed on-device (Phases 1–3 of §3.5) | ✅ Done |
+| **v0.8** | Wallpaper extension resilience (Phase 4 of §3.5, thermal pause done, rest 🔄); **app-side desktop overlay retired** — `LiveWall.app` is now a pure configurator, extension is the sole renderer for both desktop and Lock Screen, hot-reload via Darwin notification | 🔄 |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 
 ---
@@ -494,16 +484,12 @@ audio wallpapers · Windows support · web wallpapers · animated HTML
 
 | Risk | Mitigation |
 |---|---|
-| Desktop window layering | `CGWindowLevelForKey(.desktopWindow)` + factory pattern (macOS 26 compat) |
-| Mission Control / Spaces | `.canJoinAllSpaces` + `.stationary` collection behavior |
-| Sleep/wake edge cases | `SystemEventMonitor` → `PlaybackCoordinator` + window recreation on wake |
-| Multiple monitor sync | per-screen `NSWindow` instances |
-| Sandbox file access | ✅ security-scoped bookmarks (`SettingsStore`) + `user-selected.read-write` entitlement |
-| Fullscreen detection without SR permission | `FullscreenAppMonitor` returns `false` — no false positives |
-| Menu bar contrast mismatch | `DesktopWallpaperSync` sets first video frame as real desktop picture before video overlay |
-| Per-Space desktop pictures | Current Space sync is supported; other Spaces may keep their own desktop picture until activated/resynced |
+| No visible wallpaper until "LiveWall" is picked in System Settings once | Documented as the required one-time step (§9); no app-side fallback rendering exists to paper over it (§3.3) |
+| Multi-surface `CAContext` collision (desktop / Settings preview / Lock Screen sharing one XPC connection) | `WallpaperState` keys contexts by WallpaperID UUID — confirmed fix for an on-device bug, §3.5 Phase 3 |
+| `WallpaperAgent` render pipeline instability ("spiral of death") | Not yet mitigated — spiral-of-death detection + auto-restart is un-started (§3.5 Phase 4) |
+| Sandbox file access (app) | ✅ security-scoped bookmarks (`SettingsStore`) + `user-selected.read-write` entitlement |
+| Sandbox file access (extension) | ✅ read-only temporary-exception entitlement scoped to `~/Movies/LiveWall/` |
 | Legacy `.saver` unreliable on Tahoe | Keep it as a compatibility path; use a versioned provider abstraction |
-| Tahoe native pipeline is not clearly documented | Feasibility spike + go/no-go gate before production implementation |
 | Wallpaper configuration corruption | No broad replacement; atomic writes, backup exact prior state, scoped rollback |
 | App update/uninstall leaves managed assets | Stable ownership metadata + remove only LiveWall-owned files |
 
@@ -522,6 +508,12 @@ Sandbox:               YES
 Entitlements:          LiveWall/LiveWall.entitlements
   com.apple.security.app-sandbox: YES
   com.apple.security.files.user-selected.read-write: YES
+
+Second target:          LiveWallWallpaperExtension (com.apple.product-type.extensionkit-extension)
+Bundle Identifier:     com.ochurkin.LiveWall.WallpaperExtension
+Entitlements:          LiveWallWallpaperExtension/LiveWallWallpaperExtension.entitlements
+  com.apple.security.app-sandbox: YES
+  com.apple.security.temporary-exception.files.home-relative-path.read-only: /Movies/LiveWall/
 ```
 
 Distribution:
