@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarController = MenuBarController()
         LoginItemManager.shared.syncSettingsState(settings)
+        WallpaperExtensionRegistrar.bootstrap()
 
         _ = settings.resolveAndStartAccessingWallpaper()
     }
