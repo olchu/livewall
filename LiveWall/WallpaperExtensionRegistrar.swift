@@ -13,7 +13,11 @@ enum WallpaperExtensionRegistrar {
 
         DispatchQueue.global(qos: .utility).async {
             let listed = runPlugInKit(arguments: ["-m", "-p", "com.apple.wallpaper"])
-            let isRegistered = listed.output.localizedCaseInsensitiveContains(extensionBundleID)
+            let entry = listed.output.split(separator: "\n").first { $0.localizedCaseInsensitiveContains(extensionBundleID) }
+            let isRegistered = entry != nil
+            // pluginkit marks extensions already elected for use with a leading "+".
+            let isEnabled = entry?.trimmingCharacters(in: .whitespaces).hasPrefix("+") ?? false
+            if isEnabled { return }
 
             if !isRegistered {
                 let result = runPlugInKit(arguments: ["-a", extensionURL.path])
@@ -50,12 +54,13 @@ enum WallpaperExtensionRegistrar {
 
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return CommandResult(terminationStatus: -1, output: String(describing: error))
         }
 
+        // Drain before waiting — a full pipe would otherwise block the child forever.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         let output = String(data: data, encoding: .utf8) ?? ""
         return CommandResult(terminationStatus: process.terminationStatus, output: output)
     }

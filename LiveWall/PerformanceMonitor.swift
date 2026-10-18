@@ -12,7 +12,8 @@ struct PerformanceSnapshot {
 }
 
 final class PerformanceMonitor {
-    private let metalDevice = MTLCreateSystemDefaultDevice()
+    // Created on first snapshot (menu open), not on the app launch path.
+    private lazy var metalDevice = MTLCreateSystemDefaultDevice()
 
     func snapshot() -> PerformanceSnapshot {
         PerformanceSnapshot(cpu: cpuUsage(), ram: ramUsage(), gpu: gpuUsage())

@@ -11,6 +11,9 @@ struct ActiveWallpaper: @unchecked Sendable {
     var renderer: VideoRenderer?
     var destSize: CGSize
     var scaleFactor: CGFloat
+    /// Bumped by every `startRenderer` call, so a slower, older create can't
+    /// install over a newer one.
+    var rendererGeneration = 0
 }
 
 /// Fallback key for an acquire whose `id` carries no extractable WallpaperID UUID.
@@ -29,45 +32,35 @@ private let fallbackSurfaceUUID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 final class WallpaperState: Sendable {
     static let shared = WallpaperState()
 
-    private struct State: @unchecked Sendable {
-        var contexts: [UUID: ActiveWallpaper] = [:]
-        var presentationMode: String = "default"
-        var activityState: String = "active"
-    }
-
-    private let lock = OSAllocatedUnfairLock(initialState: State())
+    private let lock = OSAllocatedUnfairLock(initialState: [UUID: ActiveWallpaper]())
 
     private init() {}
 
     func context(for id: Any?) -> (uuid: UUID, context: ActiveWallpaper?) {
         let uuid = extractWallpaperUUID(fromID: id) ?? fallbackSurfaceUUID
-        return (uuid, lock.withLock { $0.contexts[uuid] })
+        return (uuid, lock.withLock { $0[uuid] })
     }
 
     func installContext(_ context: ActiveWallpaper, for uuid: UUID) {
-        lock.withLock { $0.contexts[uuid] = context }
-    }
-
-    func setRenderer(_ renderer: VideoRenderer?, for uuid: UUID) {
-        lock.withLock { $0.contexts[uuid]?.renderer = renderer }
+        lock.withLock { $0[uuid] = context }
     }
 
     /// Update stored geometry for a surface, returning it only if the geometry
     /// actually changed (so callers can skip a relayout on the common
     /// re-acquire with no change).
     func updateGeometryIfChanged(destSize: CGSize, scaleFactor: CGFloat, for uuid: UUID) -> ActiveWallpaper? {
-        lock.withLock { state in
-            guard var context = state.contexts[uuid] else { return nil }
+        lock.withLock { contexts in
+            guard var context = contexts[uuid] else { return nil }
             if context.destSize == destSize, context.scaleFactor == scaleFactor { return nil }
             context.destSize = destSize
             context.scaleFactor = scaleFactor
-            state.contexts[uuid] = context
+            contexts[uuid] = context
             return context
         }
     }
 
     func forEachRenderer(_ body: (VideoRenderer) -> Void) {
-        let renderers = lock.withLock { $0.contexts.values.compactMap(\.renderer) }
+        let renderers = lock.withLock { $0.values.compactMap(\.renderer) }
         for renderer in renderers { body(renderer) }
     }
 
@@ -79,18 +72,65 @@ final class WallpaperState: Sendable {
     /// contents under the same, still-live remote CAContext. See
     /// VideoSourceWatcher.swift.
     func reloadAllRenderers(videoURL: URL) {
-        let snapshot = lock.withLock { $0.contexts }
-        for (uuid, wallpaper) in snapshot {
-            wallpaper.renderer?.stop()
+        let uuids = lock.withLock { Array($0.keys) }
+        for uuid in uuids {
             Task {
-                guard let renderer = try? await VideoRenderer.create(rootLayer: wallpaper.rootLayer, videoURL: videoURL, stillImage: nil) else {
-                    log("  [reload] renderer create failed for uuid=\(uuid)")
-                    return
+                do {
+                    try await startRenderer(for: uuid, videoURL: videoURL)
+                } catch {
+                    log("  [reload] renderer create failed for uuid=\(uuid): \(error)")
                 }
-                setRenderer(renderer, for: uuid)
-                renderer.start()
-                PlaybackPolicy.shared.apply(to: renderer)
             }
+        }
+    }
+
+    /// Create a renderer for a surface, install it, start it, and sync it to
+    /// the current `PlaybackPolicy` — the one path both `acquire` and
+    /// `reloadAllRenderers` go through. The renderer it replaces keeps playing
+    /// until then, and is stopped on install.
+    ///
+    /// Concurrent calls for one surface (two quick wallpaper picks, or a reload
+    /// racing the first `acquire`) resolve to the newest: an outdated renderer,
+    /// or one whose surface was torn down meanwhile, is stopped instead of
+    /// installed. If creation fails the surface is left with no renderer, which
+    /// is what makes the next `acquire` retry.
+    func startRenderer(for uuid: UUID, videoURL: URL, onFirstFrameReady: (@Sendable () -> Void)? = nil) async throws {
+        let ticket = lock.withLock { contexts -> (generation: Int, rootLayer: CALayer)? in
+            guard var context = contexts[uuid] else { return nil }
+            context.rendererGeneration += 1
+            contexts[uuid] = context
+            return (context.rendererGeneration, context.rootLayer)
+        }
+        guard let ticket else { onFirstFrameReady?(); return }
+
+        let renderer: VideoRenderer
+        do {
+            renderer = try await VideoRenderer.create(rootLayer: ticket.rootLayer, videoURL: videoURL)
+        } catch {
+            swapRenderer(nil, for: uuid, generation: ticket.generation).previous?.stop()
+            throw error
+        }
+        let (installed, previous) = swapRenderer(renderer, for: uuid, generation: ticket.generation)
+        guard installed else {
+            log("  [Renderer #\(renderer.debugID)] superseded before start — discarding")
+            renderer.stop()
+            onFirstFrameReady?()
+            return
+        }
+        previous?.stop()
+        renderer.start(onFirstFrameReady: onFirstFrameReady)
+        PlaybackPolicy.shared.apply(to: renderer)
+    }
+
+    /// Install `renderer` if `generation` is still the surface's latest request,
+    /// returning whether it was and the renderer it replaced.
+    private func swapRenderer(_ renderer: VideoRenderer?, for uuid: UUID, generation: Int) -> (installed: Bool, previous: VideoRenderer?) {
+        lock.withLock { contexts in
+            guard var context = contexts[uuid], context.rendererGeneration == generation else { return (false, nil) }
+            let previous = context.renderer
+            context.renderer = renderer
+            contexts[uuid] = context
+            return (true, previous)
         }
     }
 
@@ -99,23 +139,11 @@ final class WallpaperState: Sendable {
     /// the live desktop.
     @discardableResult
     func tearDown(uuid: UUID) -> Bool {
-        let removed = lock.withLock { state -> ActiveWallpaper? in
-            state.contexts.removeValue(forKey: uuid)
-        }
+        let removed = lock.withLock { $0.removeValue(forKey: uuid) }
         guard let removed else { return false }
         removed.renderer?.stop()
         invalidateRemoteContext(removed.caContext)
         return true
-    }
-
-    var presentationMode: String {
-        get { lock.withLock { $0.presentationMode } }
-        set { lock.withLock { $0.presentationMode = newValue } }
-    }
-
-    var activityState: String {
-        get { lock.withLock { $0.activityState } }
-        set { lock.withLock { $0.activityState = newValue } }
     }
 }
 

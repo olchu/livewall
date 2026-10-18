@@ -30,7 +30,7 @@
 @property (nonatomic, readonly) audit_token_t auditToken;
 @end
 
-// MARK: - Private CAContext API (needed only once rendering lands — Phase 3)
+// MARK: - Private CAContext API (remote layer-tree hosting)
 
 @interface CAContext : NSObject
 @property (readonly) unsigned int contextId;

@@ -65,7 +65,7 @@ func buildSettingsViewModelsXPC() async -> AnyObject? {
 }
 
 /// Fallback: a WallpaperSettingsViewModelsXPC with empty groups (no video configured yet).
-func makeEmptyGroupsResponse() -> AnyObject? {
+private func makeEmptyGroupsResponse() -> AnyObject? {
     let empty = SettingsViewModels(
         desktop: SettingsViewModel(groups: [], refreshPolicy: .default, isModificationDisabled: false),
         screenSaver: nil,

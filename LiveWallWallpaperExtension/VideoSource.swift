@@ -13,16 +13,13 @@ enum VideoSource {
     static var videoURL: URL? {
         let directory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Movies/LiveWall", isDirectory: true)
+        // Must match SettingsStore.supportedVideoExtensions (app target).
         return ["mp4", "mov", "m4v"]
             .map { directory.appendingPathComponent("wallpaper.\($0)") }
             .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    private static let thumbnailURL: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("thumbnail.jpg")
-    }()
+    private static let thumbnailURL: URL = containerDocumentsURL.appendingPathComponent("thumbnail.jpg")
 
     /// Generate (or reuse a cached) JPEG thumbnail for the current video, in the
     /// extension's own sandbox container so WallpaperAgent's Settings picker can

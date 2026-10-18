@@ -20,6 +20,13 @@ final class LoginItemManager {
         }
     }
 
+    /// Toggle the login item, then re-sync the persisted setting from the real
+    /// status — on failure too, so the UI never shows a state that didn't apply.
+    func setEnabled(_ enabled: Bool, syncing settings: SettingsStore) throws {
+        defer { syncSettingsState(settings) }
+        try setEnabled(enabled)
+    }
+
     @discardableResult
     func syncSettingsState(_ settings: SettingsStore = .shared) -> Bool {
         let enabled = isEnabled

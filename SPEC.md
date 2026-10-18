@@ -238,19 +238,27 @@ renderer (`VideoRenderer.pause()`/`resume()` — freezes the current frame via
 `CMTimebaseSetRate(rate: 0)`, tears down only the `AVAssetReader`, keeps the
 remote `CAContext`/layer tree live so resuming never re-triggers `acquire`)
 on `.serious`/`.critical`, resumes on `.fair`/`.nominal`. A renderer created
-mid-throttle (fresh `acquire`) is synced to the current decision right after
-its first frame so it doesn't briefly play before the next notification.
+mid-throttle (fresh `acquire` or hot-reload) is synced to the current decision
+right after it starts (`WallpaperState.startRenderer`), so it doesn't play
+before the next notification.
+
+Renderer lifecycle hardening:
+- every renderer is created through `WallpaperState.startRenderer` (both
+  `acquire` and hot-reload); the newest request per surface wins, so races
+  never leave an orphaned layer or decoder. A failed create leaves the surface
+  without a renderer, and the next `acquire` retries.
+- `VideoRenderer` treats a reader that fails to start or yields no samples as
+  a failure, not a loop boundary, and retries with back-off (1s doubling to
+  60s) instead of spinning at 100% CPU.
 Lives entirely inside the extension process — no dependency on `LiveWall.app`
 running, same as the rest of this extension.
 
 Deferred within this phase:
 - **battery-aware pause** — the extension has no App Group entitlement to
-  read `LiveWall.app`'s `pauseOnBattery` setting (separate sandbox
-  containers). Pausing unconditionally on battery would silently diverge
-  from that toggle's default (`false`). A minimal self-contained
-  `PowerSourceObserver` (same IOKit approach as the app's
-  `PowerModeMonitor`) already exists in `PlaybackPolicy.swift`, unwired,
-  ready for once an App Group lands.
+  read a user setting from `LiveWall.app` (separate sandbox containers), and
+  pausing unconditionally on battery would be a behavior the user can't turn
+  off. Needs an IOKit power-source observer in the extension once a setting
+  can be shared.
 - **presentationMode-aware pause** — `update`'s request carries a
   presentationMode enum case name (`WallpaperXPCHandler.update`), but its
   real values (idle/lock/screensaver/etc.) are unknown without on-device
@@ -266,7 +274,9 @@ Settings UI to manage the extension's video library. Remove the abandoned
 
 1. User selects a video in LiveWall (menu bar → "Select Wallpaper…").
 2. `SettingsStore` copies it to `~/Movies/LiveWall/wallpaper.<ext>` (readable by the
-   extension via its read-only temporary-exception entitlement) and posts a Darwin
+   extension via its read-only temporary-exception entitlement) — via a hidden temp
+   file and an atomic `rename(2)`, so a reader never sees a missing or half-written
+   video — and posts a Darwin
    notification (`com.ochurkin.LiveWall.wallpaperChanged`) — no App Group, no live IPC
    round-trip to the app, just a fire-and-forget signal. `VideoSourceWatcher` in the
    extension observes it and hot-swaps every currently hosted renderer
@@ -386,7 +396,8 @@ LiveWall.app                      ✅ configurator only — picks a video, write
 ├── SettingsView / SettingsWindowPresenter  ✅ SwiftUI Settings window
 ├── SettingsStore                 ✅ SettingsStore.swift
 │   ├── UserDefaults + security-scoped bookmarks
-│   ├── copies picked video to ~/Movies/LiveWall/wallpaper.<ext>
+│   ├── copies picked video to ~/Movies/LiveWall/wallpaper.<ext> (atomic swap;
+│   │   on launch only if the source changed)
 │   └── posts com.ochurkin.LiveWall.wallpaperChanged (Darwin notification)
 ├── AppSettings                   ✅ AppSettings.swift — wallpaperURL, startAtLogin
 ├── OptimizedVideoExporter        ✅ optional 1080p/HEVC re-encode via AVAssetExportSession

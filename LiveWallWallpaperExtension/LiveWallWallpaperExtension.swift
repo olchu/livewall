@@ -2,13 +2,9 @@ import AppKit
 import ExtensionFoundation
 import Foundation
 
-/// Skeleton implementation of the `com.apple.wallpaper` ExtensionKit extension
-/// point (see LiveWallWallpaperExtension/Info.plist). This is phase 1 of the
-/// Lock Screen work described in SPEC.md: register with WallpaperAgent and
-/// confirm the private WallpaperExtensionKit classes we'd eventually bridge to
-/// are present, without touching any of them. XPC handling, rendering, and
-/// snapshot generation come in later phases once this is confirmed to load
-/// correctly on the real system.
+/// Entry point of the `com.apple.wallpaper` ExtensionKit extension (see
+/// LiveWallWallpaperExtension/Info.plist). WallpaperAgent hosts it for both
+/// desktop and Lock Screen; it owns all wallpaper rendering — see SPEC.md §3.5.
 @main
 final class LiveWallWallpaperExtension: NSObject, AppExtension {
     override required init() {
@@ -27,18 +23,12 @@ final class LiveWallWallpaperExtension: NSObject, AppExtension {
         VideoSourceWatcher.start()
     }
 
-    /// Read-only smoke test: confirms the private classes this extension will
-    /// eventually bridge to exist under this OS build. No instances are
+    /// Read-only smoke test: confirms the private classes this extension
+    /// bridges to exist under this OS build. No instances are
     /// created and no memory is touched — this only proves dlopen succeeded
     /// and the framework's Objective-C classes registered.
     private func verifyRuntimeLayout() {
-        let expected = [
-            "WallpaperRemoteContextXPC",
-            "WallpaperSnapshotXPC",
-            "WallpaperCreationRequestXPC",
-            "WallpaperSettingsViewModelsXPC",
-            "WallpaperIDXPC",
-        ]
+        let expected = WallpaperExtensionConfig.xpcTypeNames
         let missing = expected.filter { objc_getClass($0) == nil }
         if missing.isEmpty {
             log("  [SelfCheck] Runtime layout OK — all \(expected.count) expected classes present")

@@ -1,5 +1,4 @@
 import Foundation
-import IOKit.ps
 
 /// Phase 4 (Resilience): pause every hosted renderer under thermal pressure,
 /// resume once it clears. Lives entirely inside the extension process — no
@@ -7,19 +6,14 @@ import IOKit.ps
 /// extension works (WallpaperAgent hosts us whether or not the menu bar app
 /// is open; see SPEC.md §3.5).
 ///
-/// Battery-aware and presentationMode-aware pausing are deferred:
-/// - battery: the extension has no App Group to read the main app's
-///   `pauseOnBattery` setting (sandboxed, separate container) — pausing
-///   unconditionally on battery would silently diverge from that toggle's
-///   default (off).
-/// - presentationMode: `update`'s request carries a presentationMode enum
-///   case name (see WallpaperXPCHandler), but its real values are unknown
-///   without on-device capture — guessing risks pausing on the wrong signal.
+/// presentationMode-aware pausing is deferred: `update`'s request carries a
+/// presentationMode enum case name (logged by WallpaperXPCHandler), but its
+/// real values are unknown without on-device capture — guessing risks pausing
+/// on the wrong signal.
 final class PlaybackPolicy: NSObject {
     static let shared = PlaybackPolicy()
 
     private var thermalObserver: NSObjectProtocol?
-    private var powerSource: PowerSourceObserver?
 
     /// Last-applied decision, so a renderer created *after* the state changed
     /// (a fresh `acquire` while already throttled) starts paused instead of
@@ -63,49 +57,6 @@ extension ProcessInfo.ThermalState: @retroactive CustomStringConvertible {
         case .serious: "serious"
         case .critical: "critical"
         @unknown default: "unknown"
-        }
-    }
-}
-
-/// Minimal IOKit power-source-type observer, self-contained so the extension
-/// doesn't need to reference the main app target's `PowerModeMonitor`
-/// (separate PBXFileSystemSynchronizedRootGroup — see project layout in
-/// CLAUDE.md). Not wired into `PlaybackPolicy` yet; kept ready for when an
-/// App Group lets the extension read the user's `pauseOnBattery` setting.
-final class PowerSourceObserver {
-    var onBatteryChanged: ((Bool) -> Void)?
-    private var runLoopSource: CFRunLoopSource?
-    private var contextPtr: UnsafeMutableRawPointer?
-
-    var isOnBattery: Bool {
-        let info = IOPSCopyPowerSourcesInfo().takeRetainedValue()
-        let type = IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() as String?
-        return type == kIOPSBatteryPowerValue
-    }
-
-    func start() {
-        let ptr = Unmanaged.passRetained(self).toOpaque()
-        contextPtr = ptr
-        runLoopSource = IOPSNotificationCreateRunLoopSource({ ctx in
-            guard let ctx else { return }
-            let observer = Unmanaged<PowerSourceObserver>.fromOpaque(ctx).takeUnretainedValue()
-            let info = IOPSCopyPowerSourcesInfo().takeRetainedValue()
-            let type = IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() as String?
-            observer.onBatteryChanged?(type == kIOPSBatteryPowerValue)
-        }, ptr)?.takeRetainedValue()
-        if let src = runLoopSource {
-            CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
-        }
-    }
-
-    func stop() {
-        if let src = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .defaultMode)
-            runLoopSource = nil
-        }
-        if let ptr = contextPtr {
-            Unmanaged<PowerSourceObserver>.fromOpaque(ptr).release()
-            contextPtr = nil
         }
     }
 }

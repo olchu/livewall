@@ -1,5 +1,27 @@
 import Foundation
 import IOSurface
+import QuartzCore
+
+/// The extension's sandbox-container `Documents` directory (created on first
+/// use) — home of its log file and the Settings-picker thumbnail.
+let containerDocumentsURL: URL = {
+    let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}()
+
+/// Apply layer-tree mutations to a remote `CAContext` without implicit
+/// animations. Layer changes here happen on background queues with no run loop
+/// to commit implicit transactions, so the explicit `flush()` (not just
+/// `commit()`) is what actually pushes them to WindowServer — without it a
+/// change silently never reaches the host.
+func commitToRemoteContext(_ changes: () -> Void) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    changes()
+    CATransaction.commit()
+    CATransaction.flush()
+}
 
 /// Construct a WallpaperRemoteContextXPC wrapping the given CAContext ID.
 /// The real class has a `box` ivar (or offset 8 fallback) containing a

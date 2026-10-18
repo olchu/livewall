@@ -4,11 +4,7 @@ import Foundation
 /// for sandboxed extensions, which makes Console.app useless for this
 /// extension's diagnostics. Write to a plain file in the container instead —
 /// same approach Phosphene uses for the same reason.
-private let logURL: URL = {
-    let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents")
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return dir.appendingPathComponent("extension.log")
-}()
+private let logURL: URL = containerDocumentsURL.appendingPathComponent("extension.log")
 
 private let logDateFormatter: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter()

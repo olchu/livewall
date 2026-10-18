@@ -2,11 +2,28 @@ import ExtensionFoundation
 import Foundation
 
 /// Accepts XPC connections from WallpaperAgent and wires them to
-/// `WallpaperXPCHandler`. The handler is a Phase 2 stub — every method
-/// replies with an honest "nothing yet" instead of rendering — so this only
-/// proves the full protocol surface can be served without WallpaperAgent
-/// treating the extension as broken. See SPEC.md §3.5.
+/// `WallpaperXPCHandler`, which renders on `acquire` and stubs the library
+/// management methods. See SPEC.md §3.5.
 struct WallpaperExtensionConfig: AppExtensionConfiguration {
+    /// Private WallpaperExtensionKit XPC classes allowed across the connection.
+    static let xpcTypeNames = [
+        "WallpaperIDXPC",
+        "WallpaperCreationRequestXPC",
+        "WallpaperUpdateRequestXPC",
+        "WallpaperRemoteContextXPC",
+        "WallpaperSnapshotXPC",
+        "WallpaperContentTypeSetXPC",
+        "WallpaperChoiceIDXPC",
+        "WallpaperChoiceIDsXPC",
+        "WallpaperExtensionChoiceRequestXPC",
+        "WallpaperChoiceRequestAdditionResultXPC",
+        "WallpaperDebugRequestXPC",
+        "WallpaperDebugResponseXPC",
+        "WallpaperMigrationVersionXPC",
+        "WallpaperSettingsViewModelsXPC",
+        "AuditTokenXPC",
+    ]
+
     func accept(connection: NSXPCConnection) -> Bool {
         log("XPC from PID=\(connection.processIdentifier)")
 
@@ -21,27 +38,9 @@ struct WallpaperExtensionConfig: AppExtensionConfiguration {
         let exported = NSXPCInterface(with: (any WallpaperExtensionXPCProtocol).self)
 
         // Build class whitelist from runtime-loaded WallpaperExtensionKit classes.
-        let typeNames = [
-            "WallpaperIDXPC",
-            "WallpaperCreationRequestXPC",
-            "WallpaperUpdateRequestXPC",
-            "WallpaperRemoteContextXPC",
-            "WallpaperSnapshotXPC",
-            "WallpaperContentTypeSetXPC",
-            "WallpaperChoiceIDXPC",
-            "WallpaperChoiceIDsXPC",
-            "WallpaperExtensionChoiceRequestXPC",
-            "WallpaperChoiceRequestAdditionResultXPC",
-            "WallpaperDebugRequestXPC",
-            "WallpaperDebugResponseXPC",
-            "WallpaperMigrationVersionXPC",
-            "WallpaperSettingsViewModelsXPC",
-            "AuditTokenXPC",
-        ]
-
         let allTypes = NSMutableSet()
         var missing: [String] = []
-        for name in typeNames {
+        for name in Self.xpcTypeNames {
             if let cls = objc_getClass(name) {
                 allTypes.add(cls)
             } else {
@@ -112,8 +111,6 @@ struct WallpaperExtensionConfig: AppExtensionConfiguration {
             guard let handler else { return }
             log("XPC invalidated (pid: \(handler.connectionPID), served a method: \(handler.didServeMethod))")
         }
-
-        handler.agentProxy = connection.remoteObjectProxy as? (any WallpaperExtensionProxyXPCProtocol)
 
         connection.resume()
 

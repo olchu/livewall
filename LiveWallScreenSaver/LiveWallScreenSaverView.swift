@@ -17,16 +17,20 @@ final class LiveWallScreenSaverView: ScreenSaverView {
     override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
         slog("init isPreview=\(isPreview)")
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
-        animationTimeInterval = 1.0 / 30.0
+        commonInit()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        commonInit()
+    }
+
+    private func commonInit() {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-        animationTimeInterval = 1.0 / 30.0
+        // AVPlayerLayer drives its own playback — the ScreenSaverView frame
+        // timer has no per-frame work, so don't wake it 30×/s.
+        animationTimeInterval = 1.0
     }
 
     // MARK: - Lifecycle
@@ -124,6 +128,7 @@ final class LiveWallScreenSaverView: ScreenSaverView {
             return nil
         }
         let base = String(cString: pwDir) + "/Movies/LiveWall"
+        // Must match SettingsStore.supportedVideoExtensions (app target).
         for ext in ["mp4", "mov", "m4v"] {
             let url = URL(fileURLWithPath: "\(base)/wallpaper.\(ext)")
             if FileManager.default.fileExists(atPath: url.path) {

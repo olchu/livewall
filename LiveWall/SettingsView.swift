@@ -41,10 +41,8 @@ struct SettingsView: View {
             settingsStore.settings.startAtLogin
         } set: { newValue in
             do {
-                try loginItemManager.setEnabled(newValue)
-                settingsStore.settings.startAtLogin = loginItemManager.isEnabled
+                try loginItemManager.setEnabled(newValue, syncing: settingsStore)
             } catch {
-                settingsStore.settings.startAtLogin = loginItemManager.isEnabled
                 presentLoginItemError(error)
             }
         }
@@ -85,11 +83,5 @@ private struct SettingsWindowAccessor: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            if let window = nsView.window {
-                SettingsWindowPresenter.configure(window)
-            }
-        }
-    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }

@@ -26,10 +26,6 @@ enum SettingsWindowPresenter {
         settingsWindow = window
     }
 
-    static func prepareToOpenSettings() {
-        openSettings()
-    }
-
     static func configure(_ window: NSWindow) {
         window.identifier = windowIdentifier
         window.title = "LiveWall Settings"

@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LoginItemManager.shared.syncSettingsState(settings)
         WallpaperExtensionRegistrar.bootstrap()
 
-        _ = settings.resolveAndStartAccessingWallpaper()
+        settings.resolveAndStartAccessingWallpaper()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

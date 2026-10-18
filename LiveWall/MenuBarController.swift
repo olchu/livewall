@@ -14,6 +14,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private weak var gpuMenuItem: NSMenuItem?
     private weak var previewView: WallpaperPreviewView?
     private var thumbnailTask: Task<Void, Never>?
+    private var thumbnailURL: URL?
     private var optimizationTask: Task<Void, Never>?
     private let notificationCenter = UNUserNotificationCenter.current()
     private let loginItemManager = LoginItemManager.shared
@@ -35,7 +36,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func makeStatusIcon() -> NSImage? {
         let image = NSImage(named: "statusbar")
-            ?? NSImage(named: "StatusBarIcon")
             ?? NSImage(systemSymbolName: "play.rectangle.fill", accessibilityDescription: "LiveWall")
         image?.isTemplate = true
         image?.size = NSSize(width: 18, height: 18)
@@ -47,13 +47,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu(title: "LiveWall Lite")
 
         // Wallpaper preview
-        let pv = WallpaperPreviewView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let pv = WallpaperPreviewView(frame: NSRect(x: 0, y: 0, width: 280, height: 100), version: version)
         previewView = pv
         let previewItem = NSMenuItem()
         previewItem.view = pv
         menu.addItem(previewItem)
 
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
         let versionItem = NSMenuItem(title: "Version \(version)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         versionItem.attributedTitle = NSAttributedString(
@@ -102,14 +102,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return item
     }
 
+    private static let statAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+        .foregroundColor: NSColor.secondaryLabelColor,
+    ]
+
     private func makeStatItem(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
-        item.attributedTitle = NSAttributedString(
-            string: title,
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
-                         .foregroundColor: NSColor.secondaryLabelColor]
-        )
+        item.attributedTitle = NSAttributedString(string: title, attributes: Self.statAttributes)
         return item
     }
 
@@ -135,16 +136,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func updateStat(_ item: NSMenuItem?, label: String, value: String) {
         guard let item else { return }
         let text = String(format: "%-4@ %@", label + ":", value)
-        item.attributedTitle = NSAttributedString(
-            string: text,
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
-                         .foregroundColor: NSColor.secondaryLabelColor]
-        )
+        item.attributedTitle = NSAttributedString(string: text, attributes: Self.statAttributes)
     }
 
     private func updateThumbnail() {
+        let url = settings.settings.wallpaperURL
+        // The thumbnail only changes with the wallpaper — don't re-decode a
+        // frame on every menu open.
+        guard url != thumbnailURL else { return }
         thumbnailTask?.cancel()
-        guard let url = settings.settings.wallpaperURL else {
+        guard let url else {
+            thumbnailURL = nil
             previewView?.update(image: nil)
             return
         }
@@ -157,6 +159,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                   !Task.isCancelled else { return }
             let img = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
             await MainActor.run {
+                self?.thumbnailURL = url
                 self?.previewView?.update(image: img)
             }
         }
@@ -169,9 +172,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         panel.title = "Choose a wallpaper video"
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        var types: [UTType] = [.mpeg4Movie, .quickTimeMovie]
-        if let m4v = UTType(filenameExtension: "m4v") { types.append(m4v) }
-        panel.allowedContentTypes = types
+        panel.allowedContentTypes = SettingsStore.supportedVideoExtensions.compactMap { UTType(filenameExtension: $0) }
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -275,14 +276,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleStartAtLogin() {
-        let enabled = !loginItemManager.isEnabled
         do {
-            try loginItemManager.setEnabled(enabled)
-            settings.settings.startAtLogin = loginItemManager.isEnabled
-            startAtLoginItem?.state = settings.settings.startAtLogin ? .on : .off
+            try loginItemManager.setEnabled(!loginItemManager.isEnabled, syncing: settings)
         } catch {
-            settings.settings.startAtLogin = loginItemManager.isEnabled
-            startAtLoginItem?.state = settings.settings.startAtLogin ? .on : .off
             let alert = NSAlert(error: error)
             alert.messageText = "Could not update Start at Login"
             alert.runModal()
@@ -296,11 +292,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 private final class WallpaperPreviewView: NSView {
     private let imageLayer = CALayer()
     private let selectButton = NSButton()
-    private let versionLabel = NSTextField(labelWithString: "v.0.6")
+    private let versionLabel: NSTextField
 
     var onSelectWallpaper: (() -> Void)?
 
-    override init(frame frameRect: NSRect) {
+    init(frame frameRect: NSRect, version: String) {
+        versionLabel = NSTextField(labelWithString: "v.\(version)")
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor

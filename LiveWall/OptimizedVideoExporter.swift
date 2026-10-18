@@ -30,10 +30,6 @@ enum OptimizedVideoExporter {
         }
     }
 
-    static func exportOptimizedCopy(from sourceURL: URL) async throws -> URL {
-        try await optimizedCopy(from: sourceURL).url
-    }
-
     static func optimizedCopy(from sourceURL: URL) async throws -> ExportResult {
         let fingerprint = try sourceFingerprint(for: sourceURL)
         if let cachedURL = try cachedOptimizedCopy(for: fingerprint) {
@@ -114,11 +110,7 @@ enum OptimizedVideoExporter {
     }
 
     private static func fileExtension(for type: AVFileType) -> String {
-        switch type {
-        case .mp4: return "mp4"
-        case .mov: return "mov"
-        default: return "mov"
-        }
+        type == .mp4 ? "mp4" : "mov"
     }
 
     private static func makeOutputURL(fileExtension: String) throws -> URL {

@@ -1,10 +1,9 @@
 // Validates the identity of processes connecting to the extension's XPC surface.
 //
-// The exported handler will eventually drive rendering and library-mutation
-// paths, so connections should only be served to the expected Apple wallpaper
-// host. We derive the peer's code signature from its audit token (never
-// trusting the PID alone, which is reusable) and require an Apple-signed
-// platform binary.
+// The exported handler drives rendering, so connections should only be
+// served to the expected Apple wallpaper host. We derive the peer's code
+// signature from its audit token (never trusting the PID alone, which is
+// reusable) and require an Apple-signed platform binary.
 //
 // Posture: reject callers we can positively identify as non-Apple. Accept
 // Apple platform binaries — logging when the signer isn't the expected

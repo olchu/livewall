@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UniformTypeIdentifiers
 
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
@@ -8,12 +9,14 @@ final class SettingsStore: ObservableObject {
         didSet { save() }
     }
 
+    /// The `wallpaper.<ext>` variants written to ~/Movies/LiveWall. Must match
+    /// the readers' own lists (separate targets): VideoSource.videoURL and
+    /// LiveWallScreenSaverView.
+    static let supportedVideoExtensions = ["mp4", "mov", "m4v"]
+
     private let defaults = UserDefaults.standard
-    private let sharedDefaults = UserDefaults(suiteName: "group.com.ochurkin.LiveWall")
     private let settingsKey = "com.ochurkin.LiveWall.settings"
     private let bookmarkKey = "com.ochurkin.LiveWall.wallpaperBookmark"
-    private let sharedWallpaperBookmarkKey = "com.ochurkin.LiveWall.sharedWallpaperBookmark"
-    private let sharedWallpaperPathKey = "com.ochurkin.LiveWall.sharedWallpaperPath"
 
     /// Darwin notification name the wallpaper extension listens for (see
     /// LiveWallWallpaperExtension/VideoSourceWatcher.swift) to hot-swap its
@@ -52,37 +55,35 @@ final class SettingsStore: ObservableObject {
         if let bookmark {
             defaults.set(bookmark, forKey: bookmarkKey)
         }
-        publishSharedWallpaperURL(url, bookmark: bookmark, notifyExtension: true)
+        copyToMoviesFolder(url, onlyIfChanged: false)
     }
 
     /// Resolves the stored bookmark and begins access. Call on app launch.
-    func resolveAndStartAccessingWallpaper() -> URL? {
+    func resolveAndStartAccessingWallpaper() {
         stopAccessingWallpaper()
-        guard let data = defaults.data(forKey: bookmarkKey) else { return nil }
+        guard let data = defaults.data(forKey: bookmarkKey) else { return }
         var stale = false
         guard let url = try? URL(
             resolvingBookmarkData: data,
             options: .withSecurityScope,
             relativeTo: nil,
             bookmarkDataIsStale: &stale
-        ) else { return nil }
+        ) else { return }
 
         if stale {
             // Bookmark went stale (file moved/renamed) — clear it
             defaults.removeObject(forKey: bookmarkKey)
-            clearSharedWallpaperURL()
             settings.wallpaperURL = nil
-            return nil
+            return
         }
 
         _ = url.startAccessingSecurityScopedResource()
         accessingURL = url
         settings.wallpaperURL = url
-        // notifyExtension: false — this runs on every launch just to restore
-        // bookmark access; nothing actually changed, so don't hot-swap a
-        // renderer that's already showing the right video.
-        publishSharedWallpaperURL(url, bookmark: data, notifyExtension: false)
-        return url
+        // This runs on every launch just to restore bookmark access. Usually
+        // ~/Movies/LiveWall already holds this video and nothing is copied (or
+        // hot-swapped); if the source was edited in place since, refresh it.
+        copyToMoviesFolder(url, onlyIfChanged: true)
     }
 
     func stopAccessingWallpaper() {
@@ -98,53 +99,64 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    private func publishSharedWallpaperURL(_ url: URL, bookmark: Data?, notifyExtension: Bool) {
-        if let bookmark {
-            sharedDefaults?.set(bookmark, forKey: sharedWallpaperBookmarkKey)
-        }
-        sharedDefaults?.set(url.path, forKey: sharedWallpaperPathKey)
-        copyToGroupContainer(url, notifyExtension: notifyExtension)
-    }
-
     // Copies the video into ~/Movies/LiveWall/ so the legacy .saver bundle and
     // the wallpaper extension (both sandboxed, separate containers) can read
-    // it via their read-only temporary-exception entitlements.
-    private func copyToGroupContainer(_ url: URL, notifyExtension: Bool) {
+    // it via their read-only temporary-exception entitlements, then tells the
+    // extension to reload.
+    private func copyToMoviesFolder(_ url: URL, onlyIfChanged: Bool) {
         let fm = FileManager.default
         guard let moviesURL = fm.urls(for: .moviesDirectory, in: .userDomainMask).first else { return }
         let liveWallDir = moviesURL.appendingPathComponent("LiveWall", isDirectory: true)
 
-        let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
-        let filename = "wallpaper.\(ext)"
-        let destURL = liveWallDir.appendingPathComponent(filename)
+        let ext = Self.wallpaperExtension(for: url)
+        let destURL = liveWallDir.appendingPathComponent("wallpaper.\(ext)")
+        // Not a `wallpaper.<ext>` name, so readers never pick up a partial copy.
+        let tempURL = liveWallDir.appendingPathComponent(".incoming-\(UUID().uuidString).\(ext)")
 
         DispatchQueue.global(qos: .utility).async {
+            if onlyIfChanged, Self.isSameFile(url, destURL) { return }
             do {
-                if !fm.fileExists(atPath: liveWallDir.path) {
-                    try fm.createDirectory(at: liveWallDir, withIntermediateDirectories: true)
-                }
-                // Remove any previous wallpaper files with other extensions
-                for oldExt in ["mp4", "mov", "m4v"] where oldExt != ext {
-                    let old = liveWallDir.appendingPathComponent("wallpaper.\(oldExt)")
-                    try? fm.removeItem(at: old)
-                }
-                try? fm.removeItem(at: destURL)
-                try fm.copyItem(at: url, to: destURL)
-                if notifyExtension {
-                    CFNotificationCenterPostNotification(
-                        CFNotificationCenterGetDarwinNotifyCenter(),
-                        CFNotificationName(Self.wallpaperChangedNotification),
-                        nil, nil, true
-                    )
+                try fm.createDirectory(at: liveWallDir, withIntermediateDirectories: true)
+                try fm.copyItem(at: url, to: tempURL)
+                // rename(2) swaps the file in atomically: the extension (which
+                // opens a fresh reader every loop) sees the old video or the new
+                // one, never a missing or half-written file.
+                guard rename(tempURL.path, destURL.path) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
                 }
             } catch {
-                // Best-effort: screensaver/extension falls back to showing nothing
+                // Best-effort: the previous wallpaper stays in place.
+                try? fm.removeItem(at: tempURL)
+                return
             }
+            for oldExt in Self.supportedVideoExtensions where oldExt != ext {
+                try? fm.removeItem(at: liveWallDir.appendingPathComponent("wallpaper.\(oldExt)"))
+            }
+            CFNotificationCenterPostNotification(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                CFNotificationName(Self.wallpaperChangedNotification),
+                nil, nil, true
+            )
         }
     }
 
-    private func clearSharedWallpaperURL() {
-        sharedDefaults?.removeObject(forKey: sharedWallpaperBookmarkKey)
-        sharedDefaults?.removeObject(forKey: sharedWallpaperPathKey)
+    /// The `wallpaper.<ext>` extension the extension and `.saver` look for: a
+    /// supported extension as-is, otherwise the container's canonical one — the
+    /// open panel filters by type, so e.g. `clip.qt` or `clip.mpeg4` can be
+    /// picked, and must not land under a name no reader checks.
+    private static func wallpaperExtension(for url: URL) -> String {
+        let ext = url.pathExtension.lowercased()
+        if supportedVideoExtensions.contains(ext) { return ext }
+        let type = UTType(filenameExtension: ext)
+        return type?.conforms(to: .quickTimeMovie) == true ? "mov" : "mp4"
+    }
+
+    /// `copyItem` preserves size and modification date, so matching both means
+    /// `dest` is already a copy of `source`.
+    private static func isSameFile(_ source: URL, _ dest: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey]
+        guard let a = try? source.resourceValues(forKeys: keys),
+              let b = try? dest.resourceValues(forKeys: keys) else { return false }
+        return a.fileSize == b.fileSize && a.contentModificationDate == b.contentModificationDate
     }
 }

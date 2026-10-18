@@ -26,7 +26,6 @@ final class VideoRenderer: @unchecked Sendable {
     let displayLayer: AVSampleBufferDisplayLayer
     let timebase: CMTimebase
     private let renderer: AVSampleBufferVideoRenderer
-    private let stillFrameLayer: CALayer
     private let asset: AVURLAsset
     private let videoTrack: AVAssetTrack
     private let queue = DispatchQueue(label: "com.ochurkin.LiveWall.wallpaper-extension.renderer", qos: .userInitiated)
@@ -34,7 +33,17 @@ final class VideoRenderer: @unchecked Sendable {
 
     private var currentReader: AVAssetReader?
     private var currentOutput: AVAssetReaderTrackOutput?
+    private var currentReaderYieldedSample = false
     private var isPaused = false
+
+    /// Back-off before re-opening a reader that failed to start or yielded no
+    /// samples (unreadable codec, corrupt file) — retrying immediately would
+    /// spin the queue at 100% CPU. Doubles per consecutive failure, so a
+    /// permanently bad file settles at one attempt a minute; resets once a
+    /// reader plays through.
+    private static let minRetryDelay: TimeInterval = 1
+    private static let maxRetryDelay: TimeInterval = 60
+    private var retryDelay = minRetryDelay
 
     // Gapless-ish looping: offset accumulates across loops so PTS/DTS stay
     // monotonically increasing instead of resetting to 0 (which would make the
@@ -42,7 +51,7 @@ final class VideoRenderer: @unchecked Sendable {
     private var ptsOffset: CMTime = .zero
     private var lastEnqueuedEnd: CMTime = .zero
 
-    static func create(rootLayer: CALayer, videoURL: URL, stillImage: CGImage?) async throws -> VideoRenderer {
+    static func create(rootLayer: CALayer, videoURL: URL) async throws -> VideoRenderer {
         let asset = AVURLAsset(url: videoURL)
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard let track = tracks.first else {
@@ -58,21 +67,14 @@ final class VideoRenderer: @unchecked Sendable {
         displayLayer.isOpaque = true
         setDisallowsVideoLayerDisplayCompositing(displayLayer, true)
 
-        return VideoRenderer(rootLayer: rootLayer, displayLayer: displayLayer, asset: asset, videoTrack: track, stillImage: stillImage)
+        return VideoRenderer(rootLayer: rootLayer, displayLayer: displayLayer, asset: asset, videoTrack: track)
     }
 
-    private init(rootLayer: CALayer, displayLayer: AVSampleBufferDisplayLayer, asset: AVURLAsset, videoTrack: AVAssetTrack, stillImage: CGImage?) {
+    private init(rootLayer: CALayer, displayLayer: AVSampleBufferDisplayLayer, asset: AVURLAsset, videoTrack: AVAssetTrack) {
         self.displayLayer = displayLayer
         self.renderer = displayLayer.sampleBufferRenderer
         self.asset = asset
         self.videoTrack = videoTrack
-
-        self.stillFrameLayer = CALayer()
-        stillFrameLayer.frame = rootLayer.bounds
-        stillFrameLayer.contentsGravity = .resizeAspectFill
-        stillFrameLayer.contentsScale = rootLayer.contentsScale
-        stillFrameLayer.opacity = 0
-        stillFrameLayer.name = "livewall.stillFrame"
 
         var tb: CMTimebase?
         CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &tb)
@@ -83,18 +85,7 @@ final class VideoRenderer: @unchecked Sendable {
         CMTimebaseSetRate(timebase, rate: 0.0)
         displayLayer.controlTimebase = timebase
 
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        rootLayer.addSublayer(displayLayer)
-        rootLayer.addSublayer(stillFrameLayer)
-        if let stillImage, let stillBuffer = makeStillSampleBuffer(from: stillImage) {
-            Self.setDisplayImmediately(stillBuffer)
-            renderer.enqueue(stillBuffer)
-        }
-        CATransaction.commit()
-        // flush() (not just commit()) pushes the layer tree to the render server for
-        // a REMOTE context — without it the still never reaches WindowServer.
-        CATransaction.flush()
+        commitToRemoteContext { rootLayer.addSublayer(displayLayer) }
         log("  [Renderer #\(debugID)] created for \(asset.url.lastPathComponent)")
     }
 
@@ -104,27 +95,17 @@ final class VideoRenderer: @unchecked Sendable {
     /// whatever it had until our content is real (never a black flash).
     func start(onFirstFrameReady: (@Sendable () -> Void)? = nil) {
         queue.async { [weak self] in
-            guard let self else { onFirstFrameReady?(); return }
-            guard isRunning, let reader = try? AVAssetReader(asset: asset) else { onFirstFrameReady?(); return }
-            let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
-            output.alwaysCopiesSampleData = false
-            reader.add(output)
-            reader.startReading()
+            guard let self, isRunning else { onFirstFrameReady?(); return }
 
             CMTimebaseSetTime(timebase, time: .zero)
-
-            if let firstSample = output.copyNextSampleBuffer() {
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                renderer.enqueue(firstSample)
-                CATransaction.commit()
-                CATransaction.flush()
-            }
-
-            currentReader = reader
-            currentOutput = output
             ptsOffset = .zero
             lastEnqueuedEnd = .zero
+
+            // On failure the feed loop sees no samples and retries with back-off.
+            if beginReading(), let firstSample = currentOutput?.copyNextSampleBuffer() {
+                currentReaderYieldedSample = true
+                commitToRemoteContext { self.renderer.enqueue(firstSample) }
+            }
 
             CMTimebaseSetRate(timebase, rate: 1.0)
             onFirstFrameReady?()
@@ -135,15 +116,10 @@ final class VideoRenderer: @unchecked Sendable {
     /// Re-frame to a new destination geometry (display reconnected at a different
     /// resolution, or a mode change).
     func resize(to destSize: CGSize, scale: CGFloat) {
-        let bounds = CGRect(origin: .zero, size: destSize)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        displayLayer.frame = bounds
-        displayLayer.contentsScale = scale
-        stillFrameLayer.frame = bounds
-        stillFrameLayer.contentsScale = scale
-        CATransaction.commit()
-        CATransaction.flush()
+        commitToRemoteContext {
+            displayLayer.frame = CGRect(origin: .zero, size: destSize)
+            displayLayer.contentsScale = scale
+        }
     }
 
     func stop() {
@@ -154,7 +130,6 @@ final class VideoRenderer: @unchecked Sendable {
             currentReader?.cancelReading()
         }
         displayLayer.removeFromSuperlayer()
-        stillFrameLayer.removeFromSuperlayer()
     }
 
     /// Freeze on the current frame and stop decoding — unlike `stop()`, the
@@ -180,33 +155,46 @@ final class VideoRenderer: @unchecked Sendable {
             guard let self, isRunning, isPaused else { return }
             isPaused = false
             ptsOffset = lastEnqueuedEnd
-            guard let reader = try? AVAssetReader(asset: asset) else {
-                log("  [Renderer #\(debugID)] failed to create reader for resume")
+            guard beginReading() else {
                 isPaused = true
                 return
             }
-            let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
-            output.alwaysCopiesSampleData = false
-            reader.add(output)
-            reader.startReading()
-            currentReader = reader
-            currentOutput = output
             CMTimebaseSetRate(timebase, rate: 1.0)
             log("  [Renderer #\(debugID)] resumed")
             feedFromCurrentReader()
         }
     }
 
-    private static func setDisplayImmediately(_ sample: CMSampleBuffer) {
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) else { return }
-        for i in 0 ..< CFArrayGetCount(attachments) {
-            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, i), to: CFMutableDictionary.self)
-            CFDictionarySetValue(
-                dict,
-                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
-                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque(),
-            )
+    /// Swap in a fresh reader on the same asset (used for every start, loop,
+    /// resume, and recovery — a finished `AVAssetReader` can't be rewound).
+    private func beginReading() -> Bool {
+        guard let reader = try? AVAssetReader(asset: asset) else {
+            log("  [Renderer #\(debugID)] failed to create reader")
+            return false
         }
+        let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
+        output.alwaysCopiesSampleData = false
+        reader.add(output)
+        guard reader.startReading() else {
+            log("  [Renderer #\(debugID)] reader failed to start: \(reader.error?.localizedDescription ?? "unknown")")
+            return false
+        }
+        currentReader = reader
+        currentOutput = output
+        currentReaderYieldedSample = false
+        return true
+    }
+
+    /// Run `action` on the queue after `retryDelay` (then back off further),
+    /// unless a different reader was opened in the meantime (e.g. by
+    /// `resume()`) — then the retry is stale.
+    private func retryLater(_ action: @escaping (VideoRenderer) -> Void) {
+        let reader = currentReader
+        queue.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
+            guard let self, currentReader === reader else { return }
+            action(self)
+        }
+        retryDelay = min(retryDelay * 2, Self.maxRetryDelay)
     }
 
     // MARK: - Playback loop
@@ -221,7 +209,7 @@ final class VideoRenderer: @unchecked Sendable {
             if renderer.status == .failed {
                 log("  [Renderer #\(debugID)] status failed: \(renderer.error?.localizedDescription ?? "unknown") — recovering")
                 renderer.stopRequestingMediaData()
-                queue.async { [weak self] in self?.restartFromZero() }
+                retryLater { $0.restartFromZero() }
                 return
             }
             if renderer.requiresFlushToResumeDecoding {
@@ -238,10 +226,18 @@ final class VideoRenderer: @unchecked Sendable {
                         if sampleEnd > lastEnqueuedEnd { lastEnqueuedEnd = sampleEnd }
                     }
                     renderer.enqueue(adjusted)
+                    currentReaderYieldedSample = true
                 } else {
                     // Reader exhausted — loop: swap in a fresh reader on the same asset.
+                    // A reader that produced nothing at all is a failure, not a loop.
                     renderer.stopRequestingMediaData()
-                    queue.async { [weak self] in self?.loopToStart() }
+                    if currentReaderYieldedSample {
+                        retryDelay = Self.minRetryDelay
+                        queue.async { [weak self] in self?.loopToStart() }
+                    } else {
+                        log("  [Renderer #\(debugID)] reader yielded no samples — retrying in \(retryDelay)s")
+                        retryLater { $0.loopToStart() }
+                    }
                     return
                 }
             }
@@ -249,18 +245,15 @@ final class VideoRenderer: @unchecked Sendable {
     }
 
     private func loopToStart() {
-        guard isRunning else { return }
-        ptsOffset = lastEnqueuedEnd
-        guard let reader = try? AVAssetReader(asset: asset) else {
-            log("  [Renderer #\(debugID)] failed to create reader for loop restart")
+        guard isRunning, !isPaused else { return }
+        // Normally lastEnqueuedEnd is ahead of the timebase; after a failed-read
+        // stall the timebase has moved past it, and frames stamped earlier would
+        // be dropped as late.
+        ptsOffset = max(lastEnqueuedEnd, CMTimebaseGetTime(timebase))
+        guard beginReading() else {
+            retryLater { $0.loopToStart() }
             return
         }
-        let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
-        output.alwaysCopiesSampleData = false
-        reader.add(output)
-        reader.startReading()
-        currentReader = reader
-        currentOutput = output
         feedFromCurrentReader()
     }
 
@@ -268,16 +261,13 @@ final class VideoRenderer: @unchecked Sendable {
     /// was displayed (unlike a normal loop restart, which keeps the timeline
     /// continuous via ptsOffset).
     private func restartFromZero() {
-        guard isRunning else { return }
+        guard isRunning, !isPaused else { return }
         currentReader?.cancelReading()
         renderer.flush(removingDisplayedImage: true)
-        guard let reader = try? AVAssetReader(asset: asset) else { return }
-        let output = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: nil)
-        output.alwaysCopiesSampleData = false
-        reader.add(output)
-        reader.startReading()
-        currentReader = reader
-        currentOutput = output
+        guard beginReading() else {
+            retryLater { $0.restartFromZero() }
+            return
+        }
         ptsOffset = .zero
         lastEnqueuedEnd = .zero
         CMTimebaseSetTime(timebase, time: .zero)

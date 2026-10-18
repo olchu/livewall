@@ -19,6 +19,23 @@ private enum Lifecycle {
     static let teardownGrace: TimeInterval = 15.0
 }
 
+/// Errors replied to WallpaperAgent from `acquire`.
+private enum AcquireError: Int, LocalizedError, CustomNSError {
+    case noVideoConfigured = 1
+    case remoteContextXPCFailed = 2
+    case remoteContextCreationFailed = 3
+
+    static let errorDomain = "LiveWallWallpaperExtension"
+
+    var errorDescription: String? {
+        switch self {
+        case .noVideoConfigured: "No wallpaper video configured"
+        case .remoteContextXPCFailed: "Failed to wrap CAContext for XPC"
+        case .remoteContextCreationFailed: "Failed to create remote CAContext"
+        }
+    }
+}
+
 /// Implements every method WallpaperAgent can call on us
 /// (`WallpaperExtensionXPCProtocol`, declared in the bridging header).
 /// `acquire` renders LiveWall's single configured video (see VideoSource.swift);
@@ -27,13 +44,11 @@ private enum Lifecycle {
 /// (see SPEC.md).
 final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     var connectionPID: Int32 = 0
-    var agentProxy: (any WallpaperExtensionProxyXPCProtocol)?
 
-    /// Set the first time any protocol method is actually invoked. Used by
+    /// Set the first time any protocol method is actually invoked. Logged by
     /// the invalidation handler in WallpaperExtensionConfig to distinguish a
     /// connection that talked to us from one that was accepted then dropped
-    /// without ever calling anything — input Phase 4's spiral-of-death
-    /// detector will need.
+    /// without ever calling anything.
     private(set) var didServeMethod = false
 
     private func markServed(_ method: String) {
@@ -55,20 +70,16 @@ final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
 
         var destSize = CGSize(width: 2560, height: 1440)
         var scaleFactor: CGFloat = 2.0
-        if let reqObj = request as? NSObject {
-            for child in Mirror(reflecting: reqObj).children {
-                for prop in Mirror(reflecting: child.value).children where prop.label == "destination" {
-                    for destProp in Mirror(reflecting: prop.value).children {
-                        if destProp.label == "size", let size = destProp.value as? CGSize { destSize = size }
-                        if destProp.label == "scaleFactor", let sf = destProp.value as? CGFloat { scaleFactor = sf }
-                    }
-                }
+        if let request, let destination = mirrorFindProperty("destination", in: request) {
+            for prop in Mirror(reflecting: destination).children {
+                if prop.label == "size", let size = prop.value as? CGSize { destSize = size }
+                if prop.label == "scaleFactor", let sf = prop.value as? CGFloat { scaleFactor = sf }
             }
         }
 
         guard let videoURL = VideoSource.videoURL else {
             log("  [acquire] no video configured")
-            reply(nil, NSError(domain: "LiveWallWallpaperExtension", code: 1, userInfo: [NSLocalizedDescriptionKey: "No wallpaper video configured"]))
+            reply(nil, AcquireError.noVideoConfigured)
             return
         }
 
@@ -79,23 +90,30 @@ final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         if let existing {
             log("  [acquire] REUSE ctx=\(existing.contextId) uuid=\(uuid)")
             if let resized = WallpaperState.shared.updateGeometryIfChanged(destSize: destSize, scaleFactor: scaleFactor, for: uuid) {
-                CATransaction.begin(); CATransaction.setDisableActions(true)
-                resized.rootLayer.frame = CGRect(origin: .zero, size: destSize)
-                resized.rootLayer.contentsScale = scaleFactor
-                CATransaction.commit(); CATransaction.flush()
+                commitToRemoteContext {
+                    resized.rootLayer.frame = CGRect(origin: .zero, size: destSize)
+                    resized.rootLayer.contentsScale = scaleFactor
+                }
                 resized.renderer?.resize(to: destSize, scale: scaleFactor)
             }
             guard let replyObj = createRemoteContextXPC(contextId: existing.contextId) else {
-                reply(nil, NSError(domain: "LiveWallWallpaperExtension", code: 2, userInfo: nil)); return
+                reply(nil, AcquireError.remoteContextXPCFailed); return
             }
-            reply(replyObj, nil)
+            if existing.renderer == nil {
+                // An earlier create failed (e.g. the video was unreadable then) —
+                // retry now instead of handing back an empty context forever.
+                log("  [acquire] REUSE without renderer — retrying create")
+                startRendererThenReply(uuid: uuid, videoURL: videoURL, replyObj: replyObj, reply: reply)
+            } else {
+                reply(replyObj, nil)
+            }
             return
         }
 
         // First acquire for this surface: create a fresh remote CAContext.
         guard let caContextRaw = CAContext.remoteContext(), let caContext = caContextRaw as? CAContext, caContext.contextId != 0 else {
             log("  ERROR: remote CAContext creation failed")
-            reply(nil, NSError(domain: "LiveWallWallpaperExtension", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to create remote CAContext"]))
+            reply(nil, AcquireError.remoteContextCreationFailed)
             return
         }
 
@@ -103,11 +121,10 @@ final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         rootLayer.frame = CGRect(origin: .zero, size: destSize)
         rootLayer.contentsScale = scaleFactor
         rootLayer.contentsGravity = .resizeAspectFill
-        caContext.layer = rootLayer
-        CATransaction.flush()
+        commitToRemoteContext { caContext.layer = rootLayer }
 
         guard let replyObj = createRemoteContextXPC(contextId: caContext.contextId) else {
-            reply(nil, NSError(domain: "LiveWallWallpaperExtension", code: 2, userInfo: nil)); return
+            reply(nil, AcquireError.remoteContextXPCFailed); return
         }
 
         WallpaperState.shared.installContext(
@@ -116,36 +133,33 @@ final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         )
         log("  [acquire] created context \(caContext.contextId) uuid=\(uuid)")
 
-        // NB: the reply is DEFERRED until the renderer has a real frame composited.
-        // WallpaperAgent only hosts our context once it receives this reply, and a
-        // bare CALayer's `.contents` does not composite cross-process (only
-        // IOSurface-backed sample buffers do) — replying before that paints black.
+        startRendererThenReply(uuid: uuid, videoURL: videoURL, replyObj: replyObj, reply: reply)
+    }
+
+    /// NB: the reply is DEFERRED until the renderer has a real frame composited.
+    /// WallpaperAgent only hosts our context once it receives this reply, and a
+    /// bare CALayer's `.contents` does not composite cross-process (only
+    /// IOSurface-backed sample buffers do) — replying before that paints black.
+    private func startRendererThenReply(uuid: UUID, videoURL: URL, replyObj: AnyObject, reply: @escaping (Any?, Error?) -> Void) {
         Task {
-            let renderer: VideoRenderer
             do {
-                renderer = try await VideoRenderer.create(rootLayer: rootLayer, videoURL: videoURL, stillImage: nil)
+                try await WallpaperState.shared.startRenderer(for: uuid, videoURL: videoURL) {
+                    reply(replyObj, nil)
+                }
             } catch {
                 log("  [acquire] renderer create failed: \(error)")
                 reply(replyObj, nil) // unblock the acquire regardless
-                return
             }
-            WallpaperState.shared.setRenderer(renderer, for: uuid)
-            renderer.start(onFirstFrameReady: {
-                reply(replyObj, nil)
-                PlaybackPolicy.shared.apply(to: renderer)
-            })
         }
     }
 
     func update(withId _: Any?, request: Any?, reply: @escaping (Error?) -> Void) {
         markServed("update")
-        var presentationMode = "default"
+        // presentationMode isn't acted on yet (see PlaybackPolicy) — logged so
+        // its real on-device values can be captured first.
         if let request, let mode = mirrorFindProperty("presentationMode", in: request) {
-            presentationMode = enumCaseName(mode)
+            log("  [update] presentationMode=\(enumCaseName(mode))")
         }
-        WallpaperState.shared.presentationMode = presentationMode
-        // Play/pause policy lands in Phase 4 (PlaybackPolicy) — for now the
-        // renderer always plays once started.
         reply(nil)
     }
 
@@ -177,11 +191,7 @@ final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     func provideSettingsViewModels(withContentTypes types: Any?, reply: @escaping (Any?, Error?) -> Void) {
         markServed("provideSettingsViewModels")
         Task {
-            if let result = await buildSettingsViewModelsXPC() {
-                reply(result, nil)
-            } else {
-                reply(makeEmptyGroupsResponse(), nil)
-            }
+            reply(await buildSettingsViewModelsXPC(), nil)
         }
     }
 
