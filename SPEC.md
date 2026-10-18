@@ -43,24 +43,14 @@ LiveWall Lite
 Start at Login: On/Off      ✅ `LoginItemManager` + `SMAppService`
 Settings...                 ✅ SwiftUI Settings scene (⌘,)
 Quit                        ✅
-────────────────
-CPU:  3.2%                  ✅ PerformanceMonitor
-RAM:  87 MB                 ✅ PerformanceMonitor
-GPU:  ~45 MB (device)       ✅ PerformanceMonitor
 ```
 
 **The app is a configurator, not a player** (see §3.5): there is no Pause/Resume and no
 "Pause on Battery/Fullscreen/Screen Lock" — those toggles paused the app's own desktop
 overlay, which was retired once the `com.apple.wallpaper` extension proved it could render
-both desktop and Lock Screen on its own (v0.7/v0.8 cutover). CPU/RAM/GPU now reflect this
-app's own near-idle footprint, not video playback cost — that cost moved into `WallpaperAgent`
-hosting the extension and isn't attributable per-process from here.
-
-Performance metrics notes:
-- CPU — per-process, via `mach` `task_threads` + `thread_basic_info`
-- RAM — per-process physical footprint, via `task_vm_info` (`phys_footprint`)
-- GPU — `MTLDevice.currentAllocatedSize` (device-wide, not per-process; sandbox limitation)
-- Metrics update only when menu is open (`NSMenuDelegate`) — no background polling
+both desktop and Lock Screen on its own (v0.7/v0.8 cutover). The CPU/RAM/GPU rows were
+removed for the same reason: they measured this app's own near-idle process, while playback
+cost lives in `WallpaperAgent` hosting the extension, which the sandboxed app can't measure.
 
 Requirements:
 - ✅ no Dock icon (`LSUIElement = YES` + `.accessory` activation policy)
@@ -402,7 +392,6 @@ LiveWall.app                      ✅ configurator only — picks a video, write
 │   └── posts com.ochurkin.LiveWall.wallpaperChanged (Darwin notification)
 ├── AppSettings                   ✅ AppSettings.swift — wallpaperURL, startAtLogin
 ├── OptimizedVideoExporter        ✅ optional 1080p/HEVC re-encode via AVAssetExportSession
-├── PerformanceMonitor            ✅ CPU/RAM/GPU of this process (near-idle by design)
 ├── LoginItemManager              ✅ launch at login (SMAppService)
 └── ScreenSaverInstaller          ✅ installs the legacy .saver bundle (macOS 13–15 fallback)
 

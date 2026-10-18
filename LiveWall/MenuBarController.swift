@@ -6,12 +6,8 @@ import UniformTypeIdentifiers
 final class MenuBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private let settings: SettingsStore
-    private let performance = PerformanceMonitor()
 
     private weak var startAtLoginItem: NSMenuItem?
-    private weak var cpuMenuItem: NSMenuItem?
-    private weak var ramMenuItem: NSMenuItem?
-    private weak var gpuMenuItem: NSMenuItem?
     private weak var previewView: WallpaperPreviewView?
     private var thumbnailTask: Task<Void, Never>?
     private var thumbnailURL: URL?
@@ -75,19 +71,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(makeSettingsMenuItem())
 
         menu.addItem(.separator())
-
-        // Performance stats
-        let cpuItem = makeStatItem("CPU:  —")
-        let ramItem = makeStatItem("RAM:  —")
-        let gpuItem = makeStatItem("GPU:  — (device)")
-        cpuMenuItem = cpuItem
-        ramMenuItem = ramItem
-        gpuMenuItem = gpuItem
-        menu.addItem(cpuItem)
-        menu.addItem(ramItem)
-        menu.addItem(gpuItem)
-
-        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit LiveWall",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
@@ -102,18 +85,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return item
     }
 
-    private static let statAttributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
-        .foregroundColor: NSColor.secondaryLabelColor,
-    ]
-
-    private func makeStatItem(_ title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        item.attributedTitle = NSAttributedString(string: title, attributes: Self.statAttributes)
-        return item
-    }
-
     private func makeSettingsMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         item.target = self
@@ -123,20 +94,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
-        startAtLoginItem?.state      = loginItemManager.syncSettingsState(settings) ? .on : .off
-
-        let snap = performance.snapshot()
-        updateStat(cpuMenuItem, label: "CPU", value: snap.cpuFormatted)
-        updateStat(ramMenuItem, label: "RAM", value: snap.ramFormatted)
-        updateStat(gpuMenuItem, label: "GPU", value: "\(snap.gpuFormatted) (device)")
-
+        startAtLoginItem?.state = loginItemManager.syncSettingsState(settings) ? .on : .off
         updateThumbnail()
-    }
-
-    private func updateStat(_ item: NSMenuItem?, label: String, value: String) {
-        guard let item else { return }
-        let text = String(format: "%-4@ %@", label + ":", value)
-        item.attributedTitle = NSAttributedString(string: text, attributes: Self.statAttributes)
     }
 
     private func updateThumbnail() {

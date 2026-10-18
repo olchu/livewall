@@ -28,7 +28,6 @@ LiveWall/                          ← project root
 │   ├── SettingsStore.swift         UserDefaults + security-scoped bookmarks; posts a Darwin
 │   │                               notification on wallpaper change so the extension hot-reloads
 │   ├── AppSettings.swift           Codable settings struct
-│   ├── PerformanceMonitor.swift    CPU (mach task_threads), RAM (phys_footprint), GPU (MTLDevice)
 │   ├── OptimizedVideoExporter.swift  optional 1080p/HEVC re-encode of a picked video
 │   ├── LoginItemManager.swift      launch at login (SMAppService)
 │   └── ScreenSaverInstaller.swift  installs the legacy .saver bundle (macOS 13–15 fallback)
