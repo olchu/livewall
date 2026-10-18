@@ -7,19 +7,23 @@ import Observation
 @Observable
 final class LibraryModel {
     private(set) var folderURL: URL?
-    private(set) var sections: [LibrarySection] = []
-    private(set) var hasScanned = false
-    /// Standardized path of the current wallpaper — compared against every
-    /// card on each render, so normalized once here rather than per card.
-    private(set) var currentWallpaperPath: String?
+    /// `nil` until the folder has been scanned at least once.
+    private(set) var sections: [LibrarySection]?
+    /// Standardized like `LibraryVideo.url`, so cards compare by plain equality.
+    private(set) var currentWallpaperURL: URL?
     var selection: LibraryVideo?
+    var isShowingSettings = false
 
     @ObservationIgnored private let store = SettingsStore.shared
     @ObservationIgnored private var scanTask: Task<Void, Never>?
 
     init() {
         folderURL = store.settings.libraryFolderURL
-        currentWallpaperPath = store.settings.wallpaperURL?.standardizedFileURL.path
+        currentWallpaperURL = store.settings.wallpaperURL?.standardizedFileURL
+    }
+
+    var folderDisplayPath: String? {
+        folderURL.map { ($0.path as NSString).abbreviatingWithTildeInPath }
     }
 
     var canSetSelectionAsWallpaper: Bool {
@@ -28,7 +32,7 @@ final class LibraryModel {
     }
 
     func isCurrentWallpaper(_ video: LibraryVideo) -> Bool {
-        video.url.standardizedFileURL.path == currentWallpaperPath
+        video.url == currentWallpaperURL
     }
 
     func chooseFolder() {
@@ -44,21 +48,22 @@ final class LibraryModel {
         store.setLibraryFolder(url)
         folderURL = url
         selection = nil
-        sections = []
-        hasScanned = false
+        sections = nil
+        scanTask?.cancel()
+        scanTask = nil
         rescan()
     }
 
     /// Re-read the folder (on launch, folder change, and app activation, so
-    /// files added in Finder show up). Results from a superseded scan are dropped.
+    /// files added in Finder show up). A scan already running for the folder
+    /// covers the request; a folder change drops the old scan's result.
     func rescan() {
-        guard let folder = folderURL else { return }
-        scanTask?.cancel()
+        guard let folder = folderURL, scanTask == nil else { return }
         scanTask = Task {
             let scanned = await Task.detached(priority: .userInitiated) { VideoLibrary.sections(in: folder) }.value
-            guard !Task.isCancelled, folder == folderURL else { return }
+            guard !Task.isCancelled else { return }
+            scanTask = nil
             if scanned != sections { sections = scanned }
-            hasScanned = true
             if let selection, !scanned.contains(where: { $0.videos.contains(selection) }) {
                 self.selection = nil
             }
@@ -68,7 +73,17 @@ final class LibraryModel {
     func setSelectionAsWallpaper() {
         guard let selection, canSetSelectionAsWallpaper else { return }
         store.setWallpaperURL(selection.url)
-        currentWallpaperPath = selection.url.standardizedFileURL.path
+        currentWallpaperURL = selection.url
+    }
+
+    func installScreenSaver() {
+        do {
+            try ScreenSaverInstaller.installBundledScreenSaver()
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Could not install LiveWall Screen Saver"
+            alert.runModal()
+        }
     }
 
     func openWallpaperSettings() {

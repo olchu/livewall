@@ -37,6 +37,9 @@ struct LoopingVideoView: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
+        /// Display only — clicks fall through to the card underneath.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         func play(_ url: URL) {
             let player = AVQueuePlayer()
             player.isMuted = true

@@ -16,19 +16,13 @@ struct LiveWallApp: App {
                 Button("Choose Folder…", action: library.chooseFolder)
                     .keyboardShortcut("o")
             }
-            CommandGroup(after: .appInfo) {
-                Button("Install Screen Saver…", action: installScreenSaver)
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { library.isShowingSettings = true }
+                    .keyboardShortcut(",")
             }
-        }
-    }
-
-    private func installScreenSaver() {
-        do {
-            try ScreenSaverInstaller.installBundledScreenSaver()
-        } catch {
-            let alert = NSAlert(error: error)
-            alert.messageText = "Could not install LiveWall Screen Saver"
-            alert.runModal()
+            CommandGroup(after: .appInfo) {
+                Button("Install Screen Saver…", action: library.installScreenSaver)
+            }
         }
     }
 }

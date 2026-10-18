@@ -24,7 +24,8 @@ LiveWall/                          ← project root
 │   ├── LiveWallApp.swift           entry point, @main, library Window scene + menu commands
 │   ├── AppDelegate.swift           quit on last window close, extension registration
 │   ├── LibraryView.swift           the window: sections, bottom bar, empty states
-│   ├── LibrarySectionView.swift    one carousel row with ‹ › paging
+│   ├── LibrarySections.swift       section header, carousel row with ‹ › paging, single-section grid
+│   ├── SettingsPanel.swift         settings popover (toolbar gear / ⌘,)
 │   ├── VideoCard.swift             16:9 card: thumbnail, hover preview, Current badge
 │   ├── LoopingVideoView.swift      muted looping hover preview (UI only — not wallpaper rendering)
 │   ├── LibraryModel.swift          folder, sections, selection, Set as Wallpaper
@@ -34,7 +35,7 @@ LiveWall/                          ← project root
 │   │                               to ~/Movies/LiveWall and posts the extension's reload notification
 │   ├── AppSettings.swift           Codable settings struct
 │   ├── WallpaperExtensionRegistrar.swift  pluginkit registration of the bundled extension
-│   └── ScreenSaverInstaller.swift  installs the legacy .saver bundle (macOS 13–15 fallback)
+│   └── ScreenSaverInstaller.swift  installs the legacy .saver bundle
 └── LiveWallWallpaperExtension/     ← com.apple.wallpaper ExtensionKit extension — owns ALL rendering
     ├── LiveWallWallpaperExtension.swift  entry point; starts PlaybackPolicy + VideoSourceWatcher
     ├── WallpaperExtensionConfig.swift    accepts XPC from WallpaperAgent
@@ -79,7 +80,7 @@ xcodebuild ... build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED"
 |---|---|
 | Architecture | SDD — spec first, protocols define contracts, implementations follow |
 | Source of truth | `SPEC.md` — update status markers after every feature |
-| Rendering owner | `LiveWallWallpaperExtension` only — the app never renders; see SPEC.md §3.5 |
+| Rendering owner | `LiveWallWallpaperExtension` only — the app never renders wallpapers (its only video is the in-window hover preview); see SPEC.md §3.5 |
 | Settings persistence | `SettingsStore.shared` — always use `setWallpaperURL(_:)` to pick a file (not direct assignment), security-scoped bookmark handles sandbox, posts the extension's reload notification |
 | App type | Regular app with Dock icon, single `Window` scene; quits on last window close |
 | Sandbox | Only the extension is sandboxed (`ENABLE_APP_SANDBOX = YES`, read-only temporary exception for `~/Movies/LiveWall/`). The app and `.saver` have `ENABLE_APP_SANDBOX = NO`; `SettingsStore` still keeps security-scoped bookmarks |

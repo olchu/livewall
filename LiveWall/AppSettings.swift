@@ -1,6 +1,6 @@
 import Foundation
 
-struct AppSettings: Codable {
+struct AppSettings: Codable, Equatable {
     var wallpaperURL: URL?
     var libraryFolderURL: URL?
 

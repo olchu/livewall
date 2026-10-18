@@ -66,6 +66,8 @@ Behavior:
   anywhere inside it; empty sections are omitted; sections and videos sorted by name
 - ✅ each section is a horizontal carousel with ‹ › buttons that page by one screen width
   and dim at the ends; trackpad/wheel scrolling also works
+- ✅ when the library has a single section (no subfolders with videos), it is shown as a
+  wrapping grid with vertical scrolling instead of a carousel
 - ✅ card: 16:9 thumbnail (frame at ~1s, generated off the main thread, cached in memory);
   hovering ~0.3s plays the video muted and looping inside the card; "Current" badge on
   the active wallpaper
@@ -77,6 +79,9 @@ Behavior:
 - ✅ the folder is rescanned when the app becomes active, so files added in Finder show up
 - ✅ empty states: no folder chosen yet; folder has no supported videos
 - ✅ app menu: "Install Screen Saver…" (legacy `.saver`, §3.5)
+- ✅ settings popover from the toolbar gear button (also ⌘,): library folder (choose /
+  show in Finder), current wallpaper (name / show in Finder), "Open Wallpaper Settings",
+  "Install Screen Saver…"
 
 The hover preview is the only video the app itself plays — a UI preview inside its own
 window, unrelated to wallpaper rendering, which stays entirely in the extension.
@@ -393,7 +398,7 @@ extension (§3.5); LiveWall only reacts to the subset `PlaybackPolicy` explicitl
 
 ## 7. Architecture ✅
 
-Two independent processes, two targets. The app never renders (§3.3); the extension owns
+Two independent processes, two targets. The app never renders wallpapers (§3.3); the extension owns
 all playback and keeps running with the app fully quit (§3.5).
 
 ```
@@ -401,22 +406,25 @@ LiveWall.app                      ✅ configurator only — picks a video, write
 │                                     the extension. Renders nothing.
 │
 ├── LiveWallApp                   ✅ LiveWallApp.swift — @main, library Window scene + commands
-├── AppDelegate                   ✅ AppDelegate.swift — quit on last window close, bookmarks,
-│                                     extension registration, legacy login-item cleanup
+├── AppDelegate                   ✅ AppDelegate.swift — quit on last window close, extension
+│                                     registration, one-time legacy login-item cleanup
 ├── LibraryView                   ✅ LibraryView.swift — header, sections, bottom bar, empty states
-├── LibrarySectionView / VideoCard  ✅ carousel with ‹ › paging; card with hover preview
+├── LibrarySections / VideoCard   ✅ carousel with ‹ › paging (grid for a single section);
+│                                     card with hover preview
+├── SettingsPanel                 ✅ SettingsPanel.swift — toolbar popover with the app's settings
 ├── LoopingVideoView              ✅ muted looping AVPlayerLayer for the hover preview only
 ├── LibraryModel                  ✅ LibraryModel.swift — folder, sections, selection, actions
 ├── VideoLibrary                  ✅ VideoLibrary.swift — folder scan → sections
 ├── ThumbnailCache                ✅ ThumbnailCache.swift — async first-second frame, NSCache
 ├── SettingsStore                 ✅ SettingsStore.swift
-│   ├── UserDefaults + security-scoped bookmarks (wallpaper file, library folder)
+│   ├── UserDefaults + security-scoped bookmarks (wallpaper file, library folder),
+│   │   resolved on first use without UI or volume mounting
 │   ├── copies picked video to ~/Movies/LiveWall/wallpaper.<ext> (atomic swap;
 │   │   on launch only if the source changed)
 │   └── posts com.ochurkin.LiveWall.wallpaperChanged (Darwin notification)
 ├── AppSettings                   ✅ AppSettings.swift — wallpaperURL, libraryFolderURL
 ├── WallpaperExtensionRegistrar   ✅ pluginkit registration of the bundled extension
-└── ScreenSaverInstaller          ✅ installs the legacy .saver bundle (macOS 13–15 fallback)
+└── ScreenSaverInstaller          ✅ installs the legacy .saver bundle
 
 LiveWallWallpaperExtension.appex  ✅ com.apple.wallpaper ExtensionKit extension — all rendering,
 │                                     hosted inside WallpaperAgent (§3.5)

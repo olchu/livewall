@@ -45,37 +45,15 @@ final class SettingsStore {
     /// Persists a user-picked URL as a security-scoped bookmark and begins access.
     /// URL is always set immediately; bookmark is best-effort for persistence across restarts.
     func setWallpaperURL(_ url: URL) {
-        accessingURL?.stopAccessingSecurityScopedResource()
-        accessingURL = url
-        _ = url.startAccessingSecurityScopedResource()
-        storeBookmark(for: url, forKey: bookmarkKey)
+        beginAccess(url, replacing: &accessingURL, bookmarkKey: bookmarkKey)
         settings.wallpaperURL = url
         copyToMoviesFolder(url, onlyIfChanged: false)
     }
 
     /// Persists the library folder the window lists videos from, same way.
     func setLibraryFolder(_ url: URL) {
-        accessingFolderURL?.stopAccessingSecurityScopedResource()
-        accessingFolderURL = url
-        _ = url.startAccessingSecurityScopedResource()
-        storeBookmark(for: url, forKey: folderBookmarkKey)
+        beginAccess(url, replacing: &accessingFolderURL, bookmarkKey: folderBookmarkKey)
         settings.libraryFolderURL = url
-    }
-
-    /// Resolves the stored bookmarks and begins access (on first use, i.e. launch).
-    private func restoreBookmarks() {
-        if let folder = resolveBookmark(forKey: folderBookmarkKey, onStale: { settings.libraryFolderURL = nil }) {
-            accessingFolderURL = folder
-            settings.libraryFolderURL = folder
-        }
-        if let url = resolveBookmark(forKey: bookmarkKey, onStale: { settings.wallpaperURL = nil }) {
-            accessingURL = url
-            settings.wallpaperURL = url
-            // Usually ~/Movies/LiveWall already holds this video and nothing is
-            // copied (or hot-swapped); if the source was edited in place since,
-            // refresh it.
-            copyToMoviesFolder(url, onlyIfChanged: true)
-        }
     }
 
     func stopAccessing() {
@@ -85,26 +63,46 @@ final class SettingsStore {
         accessingFolderURL = nil
     }
 
-    private func storeBookmark(for url: URL, forKey key: String) {
+    private func beginAccess(_ url: URL, replacing token: inout URL?, bookmarkKey key: String) {
+        token?.stopAccessingSecurityScopedResource()
+        token = url
+        _ = url.startAccessingSecurityScopedResource()
         if let bookmark = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
             defaults.set(bookmark, forKey: key)
         }
     }
 
-    /// Resolve a stored bookmark and start accessing it. A stale bookmark (the
-    /// item was moved or renamed) is dropped and `onStale` clears its setting.
-    private func resolveBookmark(forKey key: String, onStale: () -> Void) -> URL? {
-        guard let data = defaults.data(forKey: key) else { return nil }
+    /// Resolves the stored bookmarks and begins access (on first use, i.e.
+    /// launch). Saves settings only if a bookmark changed them.
+    private func restoreBookmarks() {
+        var restored = settings
+        restored.libraryFolderURL = restoreBookmark(forKey: folderBookmarkKey, into: &accessingFolderURL, current: restored.libraryFolderURL)
+        restored.wallpaperURL = restoreBookmark(forKey: bookmarkKey, into: &accessingURL, current: restored.wallpaperURL)
+        if restored != settings { settings = restored }
+        if let wallpaper = accessingURL {
+            // Usually ~/Movies/LiveWall already holds this video and nothing is
+            // copied (or hot-swapped); if the source was edited in place since,
+            // refresh it.
+            copyToMoviesFolder(wallpaper, onlyIfChanged: true)
+        }
+    }
+
+    /// The URL to keep for a setting: its bookmark resolved and accessed; `nil`
+    /// if the bookmark went stale (item moved or renamed — it's dropped); or
+    /// `current` when there's no usable bookmark. Never prompts or mounts a
+    /// volume, since this runs before the window appears.
+    private func restoreBookmark(forKey key: String, into token: inout URL?, current: URL?) -> URL? {
+        guard let data = defaults.data(forKey: key) else { return current }
         var stale = false
-        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) else {
-            return nil
+        guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale) else {
+            return current
         }
         if stale {
             defaults.removeObject(forKey: key)
-            onStale()
             return nil
         }
         _ = url.startAccessingSecurityScopedResource()
+        token = url
         return url
     }
 

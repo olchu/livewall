@@ -22,9 +22,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Start at Login was removed with the menu bar (the app no longer runs in
-    /// the background) — undo a login item an older version registered.
+    /// the background) — undo a login item an older version registered. Done
+    /// once: `SMAppService.status` is a synchronous call into the system.
     private func unregisterLegacyLoginItem() {
-        guard SMAppService.mainApp.status == .enabled else { return }
-        try? SMAppService.mainApp.unregister()
+        let doneKey = "com.ochurkin.LiveWall.legacyLoginItemRemoved"
+        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
+        if SMAppService.mainApp.status == .enabled {
+            try? SMAppService.mainApp.unregister()
+        }
+        UserDefaults.standard.set(true, forKey: doneKey)
     }
 }
