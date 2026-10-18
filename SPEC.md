@@ -235,8 +235,9 @@ auto-restart, multi-display/per-Space selection, pause-when-occluded.
 Thermal-state pause/resume done: `PlaybackPolicy.swift` observes
 `ProcessInfo.thermalStateDidChangeNotification` and pauses every hosted
 renderer (`VideoRenderer.pause()`/`resume()` — freezes the current frame via
-`CMTimebaseSetRate(rate: 0)`, tears down only the `AVAssetReader`, keeps the
-remote `CAContext`/layer tree live so resuming never re-triggers `acquire`)
+`CMTimebaseSetRate(rate: 0)` and stops feeding samples, keeping the
+`AVAssetReader` and the remote `CAContext`/layer tree live, so resuming
+continues from the same frame and never re-triggers `acquire`)
 on `.serious`/`.critical`, resumes on `.fair`/`.nominal`. A renderer created
 mid-throttle (fresh `acquire` or hot-reload) is synced to the current decision
 right after it starts (`WallpaperState.startRenderer`), so it doesn't play

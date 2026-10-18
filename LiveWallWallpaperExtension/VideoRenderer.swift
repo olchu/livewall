@@ -44,6 +44,7 @@ final class VideoRenderer: @unchecked Sendable {
     private static let minRetryDelay: TimeInterval = 1
     private static let maxRetryDelay: TimeInterval = 60
     private var retryDelay = minRetryDelay
+    private var pendingRetry: DispatchWorkItem?
 
     // Gapless-ish looping: offset accumulates across loops so PTS/DTS stay
     // monotonically increasing instead of resetting to 0 (which would make the
@@ -132,41 +133,35 @@ final class VideoRenderer: @unchecked Sendable {
         displayLayer.removeFromSuperlayer()
     }
 
-    /// Freeze on the current frame and stop decoding — unlike `stop()`, the
+    /// Freeze on the current frame and stop feeding — unlike `stop()`, the
     /// layer tree and remote CAContext stay live so `resume()` can pick back up
-    /// without WallpaperAgent seeing a black flash or re-`acquire`.
+    /// without WallpaperAgent seeing a black flash or re-`acquire`. With the
+    /// timebase stopped the display layer drains nothing, so decoding halts
+    /// once its small lookahead queue is full.
     func pause() {
         queue.async { [weak self] in
             guard let self, isRunning, !isPaused else { return }
             isPaused = true
             renderer.stopRequestingMediaData()
-            currentReader?.cancelReading()
-            currentReader = nil
-            currentOutput = nil
+            pendingRetry?.cancel()
             CMTimebaseSetRate(timebase, rate: 0.0)
             log("  [Renderer #\(debugID)] paused")
         }
     }
 
-    /// Resume after `pause()`. Restarts decoding from a fresh reader at the
-    /// paused timeline position, same as a normal loop restart.
+    /// Resume after `pause()` from the same reader and timeline position.
     func resume() {
         queue.async { [weak self] in
             guard let self, isRunning, isPaused else { return }
             isPaused = false
-            ptsOffset = lastEnqueuedEnd
-            guard beginReading() else {
-                isPaused = true
-                return
-            }
             CMTimebaseSetRate(timebase, rate: 1.0)
             log("  [Renderer #\(debugID)] resumed")
             feedFromCurrentReader()
         }
     }
 
-    /// Swap in a fresh reader on the same asset (used for every start, loop,
-    /// resume, and recovery — a finished `AVAssetReader` can't be rewound).
+    /// Swap in a fresh reader on the same asset (used for start, every loop,
+    /// and recovery — a finished `AVAssetReader` can't be rewound).
     private func beginReading() -> Bool {
         guard let reader = try? AVAssetReader(asset: asset) else {
             log("  [Renderer #\(debugID)] failed to create reader")
@@ -185,15 +180,18 @@ final class VideoRenderer: @unchecked Sendable {
         return true
     }
 
-    /// Run `action` on the queue after `retryDelay` (then back off further),
-    /// unless a different reader was opened in the meantime (e.g. by
-    /// `resume()`) — then the retry is stale.
+    /// Run `action` on the queue after `retryDelay`, then back off further.
+    /// At most one retry is pending; `pause()` cancels it, and `resume()`
+    /// re-detects the failure through the feed loop.
     private func retryLater(_ action: @escaping (VideoRenderer) -> Void) {
-        let reader = currentReader
-        queue.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
-            guard let self, currentReader === reader else { return }
+        pendingRetry?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            pendingRetry = nil
             action(self)
         }
+        pendingRetry = item
+        queue.asyncAfter(deadline: .now() + retryDelay, execute: item)
         retryDelay = min(retryDelay * 2, Self.maxRetryDelay)
     }
 
