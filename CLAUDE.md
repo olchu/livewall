@@ -19,17 +19,21 @@ LiveWall/                          ← project root
 ├── CLAUDE.md                      ← this file
 ├── SPEC.md                        ← living technical specification (source of truth)
 ├── LiveWall.xcodeproj/
-├── LiveWall/                      ← main app: pure configurator, renders nothing (flat, no subdirectories)
-│   ├── LiveWallApp.swift           entry point, @main, AppDelegate adaptor
-│   ├── AppDelegate.swift           app lifecycle — starts the menu bar only, no rendering
-│   ├── MenuBarController.swift     NSStatusItem, menu: Select Wallpaper / Settings / Quit
-│   ├── SettingsView.swift          SwiftUI Settings window
-│   ├── SettingsWindowPresenter.swift
-│   ├── SettingsStore.swift         UserDefaults + security-scoped bookmarks; posts a Darwin
-│   │                               notification on wallpaper change so the extension hot-reloads
+├── LiveWall/                      ← main app: configurator with one library window, renders no
+│   │                                 wallpaper (flat, no subdirectories)
+│   ├── LiveWallApp.swift           entry point, @main, library Window scene + menu commands
+│   ├── AppDelegate.swift           quit on last window close, extension registration
+│   ├── LibraryView.swift           the window: sections, bottom bar, empty states
+│   ├── LibrarySectionView.swift    one carousel row with ‹ › paging
+│   ├── VideoCard.swift             16:9 card: thumbnail, hover preview, Current badge
+│   ├── LoopingVideoView.swift      muted looping hover preview (UI only — not wallpaper rendering)
+│   ├── LibraryModel.swift          folder, sections, selection, Set as Wallpaper
+│   ├── VideoLibrary.swift          folder scan → sections (subfolder = section)
+│   ├── ThumbnailCache.swift        async card thumbnails, NSCache
+│   ├── SettingsStore.swift         UserDefaults + security-scoped bookmarks; copies the wallpaper
+│   │                               to ~/Movies/LiveWall and posts the extension's reload notification
 │   ├── AppSettings.swift           Codable settings struct
-│   ├── OptimizedVideoExporter.swift  optional 1080p/HEVC re-encode of a picked video
-│   ├── LoginItemManager.swift      launch at login (SMAppService)
+│   ├── WallpaperExtensionRegistrar.swift  pluginkit registration of the bundled extension
 │   └── ScreenSaverInstaller.swift  installs the legacy .saver bundle (macOS 13–15 fallback)
 └── LiveWallWallpaperExtension/     ← com.apple.wallpaper ExtensionKit extension — owns ALL rendering
     ├── LiveWallWallpaperExtension.swift  entry point; starts PlaybackPolicy + VideoSourceWatcher
@@ -46,8 +50,12 @@ LiveWall/                          ← project root
 **The app never plays video itself.** `LiveWall.app` only lets the user pick a video, copies it to
 `~/Movies/LiveWall/wallpaper.<ext>`, and signals the extension. Playback — desktop AND Lock Screen —
 is rendered entirely by `WallpaperAgent` hosting `LiveWallWallpaperExtension`, and keeps running with
-`LiveWall.app` fully quit. See SPEC.md §3.5. Do not reintroduce app-side rendering (an `NSWindow`
-overlay, `AVPlayerLayer`, etc.) — this was the pre-v0.7 architecture and was deliberately retired.
+`LiveWall.app` fully quit. See SPEC.md §3.5. Do not reintroduce app-side wallpaper rendering (a desktop
+`NSWindow` overlay, etc.) — this was the pre-v0.7 architecture and was deliberately retired. The only
+video the app plays is the hover preview inside its own library window (`LoopingVideoView`).
+
+**The app is a regular windowed app** (SPEC.md §3.1): it opens straight into the library window and
+quits when it closes — no menu bar extra, no login item, no background presence.
 
 **File system sync:** The Xcode project uses `PBXFileSystemSynchronizedRootGroup` — any `.swift` file added to `LiveWall/` or `LiveWallWallpaperExtension/` is automatically included in that folder's target. No need to modify `project.pbxproj` manually.
 
@@ -73,8 +81,8 @@ xcodebuild ... build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED"
 | Source of truth | `SPEC.md` — update status markers after every feature |
 | Rendering owner | `LiveWallWallpaperExtension` only — the app never renders; see SPEC.md §3.5 |
 | Settings persistence | `SettingsStore.shared` — always use `setWallpaperURL(_:)` to pick a file (not direct assignment), security-scoped bookmark handles sandbox, posts the extension's reload notification |
-| No Dock icon | `LSUIElement=YES` in build settings + `NSApp.setActivationPolicy(.accessory)` |
-| Sandbox | `ENABLE_APP_SANDBOX = YES` on both targets — file access requires security-scoped bookmarks / temporary-exception entitlements |
+| App type | Regular app with Dock icon, single `Window` scene; quits on last window close |
+| Sandbox | Only the extension is sandboxed (`ENABLE_APP_SANDBOX = YES`, read-only temporary exception for `~/Movies/LiveWall/`). The app and `.saver` have `ENABLE_APP_SANDBOX = NO`; `SettingsStore` still keeps security-scoped bookmarks |
 | Extension window level | `CAContext` hosted by `WallpaperAgent` via ExtensionKit — not an app-owned `NSWindow` |
 | Loop playback | `VideoRenderer` — fresh `AVAssetReader` per loop, PTS/DTS offset kept monotonic |
 | No GIF | AVFoundation + hardware decoding only |
@@ -87,8 +95,8 @@ xcodebuild ... build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED"
 |---|---|
 | Bundle ID | `com.ochurkin.LiveWall` |
 | Swift | 5.0 |
-| Min macOS | 13 Ventura |
-| Sandbox | YES |
+| Min macOS | 26 (project-level `MACOSX_DEPLOYMENT_TARGET`) |
+| Sandbox | extension only |
 | Hardened Runtime | YES |
 
 ---
@@ -105,6 +113,7 @@ xcodebuild ... build 2>&1 | grep -E "error:|BUILD SUCCEEDED|BUILD FAILED"
 | v0.6 Crossfade loop transition | ✅ Done |
 | v0.7 Wallpaper ExtensionKit skeleton (§3.5 Phase 1) | 🔄 |
 | v0.8 Wallpaper extension: XPC/rendering/resilience (§3.5 Phases 2–4) | 🔄 |
+| v0.9 Library window replaces the menu bar app (§3.1) | 🔄 |
 | v1.0 Production | ⏳ |
 
 Full feature status → see `SPEC.md`.

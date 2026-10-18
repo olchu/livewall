@@ -2,10 +2,10 @@ import Foundation
 
 struct AppSettings: Codable {
     var wallpaperURL: URL?
-    var startAtLogin: Bool
+    var libraryFolderURL: URL?
 
     static let `default` = AppSettings(
         wallpaperURL: nil,
-        startAtLogin: false
+        libraryFolderURL: nil
     )
 }

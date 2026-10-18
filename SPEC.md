@@ -13,7 +13,8 @@ Primary objectives:
 - minimal CPU/GPU usage
 - minimal RAM usage
 - minimal disk footprint
-- native macOS experience — no Electron, no unnecessary background services
+- native macOS experience — no Electron, no background services: the app is opened to pick
+  a wallpaper and quit; playback lives in the system-hosted extension (§3.5)
 
 ---
 
@@ -21,41 +22,68 @@ Primary objectives:
 
 | Setting | Value |
 |---|---|
-| OS | macOS 13 Ventura+ |
+| OS | macOS 26 Tahoe+ (project deployment target) |
 | Language | Swift |
 | UI | SwiftUI + AppKit |
 | Video Engine | AVFoundation |
-| App Type | Menu Bar Utility |
+| App Type | Regular windowed app (Dock icon, single library window) |
 | Architecture | Apple Silicon first |
 
 ---
 
 ## 3. Core Features
 
-### 3.1 Menu Bar Application ✅
+### 3.1 Library Window 🔄
+
+LiveWall is a regular app with one window — no menu bar extra, no background presence. It
+opens straight into the library window and quits when that window closes. The app is a
+configurator, not a player (§3.5): it picks a video and hands it to the extension.
 
 ```
-LiveWall Lite
-────────────────
-[Preview thumbnail]          ✅ video first frame, 280×100, rounded top corners
-  [Select Wallpaper… button] ✅ ghost button centered on preview, opens file picker
-────────────────
-Start at Login: On/Off      ✅ `LoginItemManager` + `SMAppService`
-Settings...                 ✅ SwiftUI Settings scene (⌘,)
-Quit                        ✅
+┌───────────────────────────────────────────────────────────────┐
+│ ● ● ●   📁 Wallpapers  ~/Movies/Wallpapers   [Choose Folder…] ⟳│  header
+├───────────────────────────────────────────────────────────────┤
+│ Wallpapers                                              ‹  ›  │  section: root videos
+│ 12 videos                                                     │
+│ ╭────────╮ ╭────────╮ ╭────────╮ ╭──                          │  horizontal carousel
+│ │Current │ │        │ │ (hover │ │                            │  of 16:9 cards
+│ ╰────────╯ ╰────────╯ ╰─plays)─╯ ╰──                          │
+│ Anime                                                   ‹  ›  │  section per subfolder
+│ 7 videos                                                      │
+│ ╭────────╮ ╭────────╮ ...                                     │
+├───────────────────────────────────────────────────────────────┤
+│ city-night.mp4                 [Open Wallpaper Settings] [Set as Wallpaper] │  bottom bar
+└───────────────────────────────────────────────────────────────┘
 ```
 
-**The app is a configurator, not a player** (see §3.5): there is no Pause/Resume and no
-"Pause on Battery/Fullscreen/Screen Lock" — those toggles paused the app's own desktop
-overlay, which was retired once the `com.apple.wallpaper` extension proved it could render
-both desktop and Lock Screen on its own (v0.7/v0.8 cutover). The CPU/RAM/GPU rows were
-removed for the same reason: they measured this app's own near-idle process, while playback
-cost lives in `WallpaperAgent` hosting the extension, which the sandboxed app can't measure.
+Behavior:
+- ✅ launch opens the library window; closing it quits the app
+  (`applicationShouldTerminateAfterLastWindowClosed`)
+- ✅ "Choose Folder…" (⌘O) picks the library folder; persisted as a security-scoped
+  bookmark (`SettingsStore.setLibraryFolder`)
+- ✅ sections: videos directly in the folder form the first section (titled with the
+  folder name); each immediate subfolder is its own section, holding every video found
+  anywhere inside it; empty sections are omitted; sections and videos sorted by name
+- ✅ each section is a horizontal carousel with ‹ › buttons that page by one screen width
+  and dim at the ends; trackpad/wheel scrolling also works
+- ✅ card: 16:9 thumbnail (frame at ~1s, generated off the main thread, cached in memory);
+  hovering ~0.3s plays the video muted and looping inside the card; "Current" badge on
+  the active wallpaper
+- ✅ click selects a card (accent outline); "Set as Wallpaper" in the bottom bar applies
+  the selection via `SettingsStore.setWallpaperURL` — disabled when nothing is selected
+  or the selection already is the wallpaper
+- ✅ "Open Wallpaper Settings" opens System Settings → Wallpaper, where "LiveWall" is
+  picked once (§9)
+- ✅ the folder is rescanned when the app becomes active, so files added in Finder show up
+- ✅ empty states: no folder chosen yet; folder has no supported videos
+- ✅ app menu: "Install Screen Saver…" (legacy `.saver`, §3.5)
 
-Requirements:
-- ✅ no Dock icon (`LSUIElement = YES` + `.accessory` activation policy)
-- ✅ no Cmd+Tab appearance
-- ✅ lightweight background behavior
+The hover preview is the only video the app itself plays — a UI preview inside its own
+window, unrelated to wallpaper rendering, which stays entirely in the extension.
+
+Removed with the menu bar redesign: the status item and its menu, Start at Login (the app
+no longer runs in the background; a login item left registered by an older version is
+unregistered on launch), the Settings window, and the optimized 1080p copy (see §3.2).
 
 ---
 
@@ -69,14 +97,8 @@ Supported formats:
 Recommended encoding: H.264 or H.265 / 24–30 FPS / 1080p–1440p / no audio.  
 GIF: ❌ not used.
 
-Optional optimizer:
-- ✅ user can create an optimized local copy when selecting a wallpaper
-- ✅ optimized files are stored under Application Support / LiveWall / OptimizedWallpapers
-- ✅ original user video is never modified
-- ✅ optimizer prefers built-in AVFoundation 1080p export for lower decode cost
-- ✅ success notification confirms the optimized file
-- ✅ failed optimization falls back to the original video and shows an alert
-- 🔄 future: explicit FPS / bitrate controls via AVAssetReader + AVAssetWriter if needed
+Optional optimizer: ❌ removed — the 1080p re-encode prompt on every pick was dropped with
+the library window redesign (§3.1); the original video is always used.
 
 ---
 
@@ -95,8 +117,8 @@ risked exactly the two-renderers-fighting-over-one-desktop class of bug this pro
 already hit once (v0.6.1). `WallpaperWindowManager`, `WallpaperWindow`, `VideoWallpaperView`,
 `WallpaperWindowManaging`, `VideoPlayback`, `PlaybackCoordinator`, `SystemEventMonitor`,
 `PowerModeMonitor`, `FullscreenAppMonitor`, and `DesktopWallpaperSync` were deleted from the
-`LiveWall` target. `AppDelegate` now only starts the menu bar and resolves the security-scoped
-bookmark for the preview thumbnail — it creates no window and renders nothing. See §3.5 and
+`LiveWall` target. The app now only shows its library window (§3.1) and renders no
+wallpaper. See §3.5 and
 §7 for the current architecture.
 
 ---
@@ -263,7 +285,7 @@ Settings UI to manage the extension's video library. Remove the abandoned
 
 #### Expected user flow (✅ current behavior)
 
-1. User selects a video in LiveWall (menu bar → "Select Wallpaper…").
+1. User selects a video in LiveWall's library window and clicks "Set as Wallpaper" (§3.1).
 2. `SettingsStore` copies it to `~/Movies/LiveWall/wallpaper.<ext>` (readable by the
    extension via its read-only temporary-exception entitlement) — via a hidden temp
    file and an atomic `rename(2)`, so a reader never sees a missing or half-written
@@ -308,16 +330,13 @@ either would mean building them into `VideoRenderer` itself; not currently plann
 
 ### 4.1 AppSettings ✅
 
-Trimmed to just the two fields that still mean something once the app doesn't render
-(§3.3): `playbackMode`, `pauseOnBattery`, `pauseWhenFullscreen`, `pauseWhenLocked`,
-`crossfadeEnabled`, `crossfadeDuration`, and `batterySaverEnabled` were all removed —
-each one only ever configured a now-deleted app-side component, and had no reader
-left anywhere in the codebase.
+Only fields the configurator still needs. Rendering options were removed with app-side
+rendering (§3.3); `startAtLogin` was removed with the menu bar (§3.1).
 
 | Field | Type | Status |
 |---|---|---|
 | `wallpaperURL` | `URL?` | ✅ persisted via security-scoped bookmark |
-| `startAtLogin` | `Bool` | ✅ `LoginItemManager` + `SMAppService` |
+| `libraryFolderURL` | `URL?` | ✅ persisted via security-scoped bookmark |
 
 Persistence: ✅ `UserDefaults` via `SettingsStore`
 
@@ -381,18 +400,22 @@ all playback and keeps running with the app fully quit (§3.5).
 LiveWall.app                      ✅ configurator only — picks a video, writes it, signals
 │                                     the extension. Renders nothing.
 │
-├── LiveWallApp                   ✅ LiveWallApp.swift — @main, Settings scene
-├── AppDelegate                   ✅ AppDelegate.swift — starts MenuBarController only
-├── MenuBarController             ✅ MenuBarController.swift — NSStatusItem, Select/Settings/Quit
-├── SettingsView / SettingsWindowPresenter  ✅ SwiftUI Settings window
+├── LiveWallApp                   ✅ LiveWallApp.swift — @main, library Window scene + commands
+├── AppDelegate                   ✅ AppDelegate.swift — quit on last window close, bookmarks,
+│                                     extension registration, legacy login-item cleanup
+├── LibraryView                   ✅ LibraryView.swift — header, sections, bottom bar, empty states
+├── LibrarySectionView / VideoCard  ✅ carousel with ‹ › paging; card with hover preview
+├── LoopingVideoView              ✅ muted looping AVPlayerLayer for the hover preview only
+├── LibraryModel                  ✅ LibraryModel.swift — folder, sections, selection, actions
+├── VideoLibrary                  ✅ VideoLibrary.swift — folder scan → sections
+├── ThumbnailCache                ✅ ThumbnailCache.swift — async first-second frame, NSCache
 ├── SettingsStore                 ✅ SettingsStore.swift
-│   ├── UserDefaults + security-scoped bookmarks
+│   ├── UserDefaults + security-scoped bookmarks (wallpaper file, library folder)
 │   ├── copies picked video to ~/Movies/LiveWall/wallpaper.<ext> (atomic swap;
 │   │   on launch only if the source changed)
 │   └── posts com.ochurkin.LiveWall.wallpaperChanged (Darwin notification)
-├── AppSettings                   ✅ AppSettings.swift — wallpaperURL, startAtLogin
-├── OptimizedVideoExporter        ✅ optional 1080p/HEVC re-encode via AVAssetExportSession
-├── LoginItemManager              ✅ launch at login (SMAppService)
+├── AppSettings                   ✅ AppSettings.swift — wallpaperURL, libraryFolderURL
+├── WallpaperExtensionRegistrar   ✅ pluginkit registration of the bundled extension
 └── ScreenSaverInstaller          ✅ installs the legacy .saver bundle (macOS 13–15 fallback)
 
 LiveWallWallpaperExtension.appex  ✅ com.apple.wallpaper ExtensionKit extension — all rendering,
@@ -433,7 +456,7 @@ not a protocol; its public surface is `start(onFirstFrameReady:)`, `pause()`, `r
 ```swift
 struct AppSettings: Codable {
     var wallpaperURL: URL?         // resolved from security-scoped bookmark via SettingsStore
-    var startAtLogin: Bool
+    var libraryFolderURL: URL?     // same
 }
 ```
 
@@ -442,8 +465,8 @@ struct AppSettings: Codable {
 ## 9. UX — First Launch ✅
 
 ```
-1. App launches in menu bar, renders nothing
-2. User selects a video wallpaper from the menu
+1. App opens its library window; user chooses a folder with videos (once — remembered)
+2. User selects a video and clicks "Set as Wallpaper"
 3. LiveWall copies it to ~/Movies/LiveWall and signals the extension (§3.5)
 4. User picks "LiveWall" in System Settings → Wallpaper (one-time)
 5. macOS plays it — desktop and Lock Screen — via WallpaperAgent, independent
@@ -470,6 +493,7 @@ visibly rendered (no app-side fallback rendering exists anymore, §3.3).
 | **v0.6.1** | Aerial-asset-substitution Lock Screen hack — shipped, caused black screen on wake, abandoned | ❌ Reverted |
 | **v0.7** | `com.apple.wallpaper` ExtensionKit target — skeleton, XPC, rendering MVP confirmed on-device (Phases 1–3 of §3.5) | ✅ Done |
 | **v0.8** | Wallpaper extension resilience (Phase 4 of §3.5, thermal pause done, rest 🔄); **app-side desktop overlay retired** — `LiveWall.app` is now a pure configurator, extension is the sole renderer for both desktop and Lock Screen, hot-reload via Darwin notification | 🔄 |
+| **v0.9** | library window replaces the menu bar app: folder of videos as carousel sections, hover preview, "Set as Wallpaper"; Start at Login and the 1080p optimizer removed (§3.1) | 🔄 |
 | **v1.0** | signed, notarized, DMG, optimized | ⏳ |
 
 ---
@@ -488,7 +512,7 @@ audio wallpapers · Windows support · web wallpapers · animated HTML
 | No visible wallpaper until "LiveWall" is picked in System Settings once | Documented as the required one-time step (§9); no app-side fallback rendering exists to paper over it (§3.3) |
 | Multi-surface `CAContext` collision (desktop / Settings preview / Lock Screen sharing one XPC connection) | `WallpaperState` keys contexts by WallpaperID UUID — confirmed fix for an on-device bug, §3.5 Phase 3 |
 | `WallpaperAgent` render pipeline instability ("spiral of death") | Not yet mitigated — spiral-of-death detection + auto-restart is un-started (§3.5 Phase 4) |
-| Sandbox file access (app) | ✅ security-scoped bookmarks (`SettingsStore`) + `user-selected.read-write` entitlement |
+| Sandbox file access (app) | App is currently not sandboxed (`ENABLE_APP_SANDBOX = NO`); `SettingsStore` still keeps security-scoped bookmarks so enabling the sandbox later only needs the entitlements wired in |
 | Sandbox file access (extension) | ✅ read-only temporary-exception entitlement scoped to `~/Movies/LiveWall/` |
 | Legacy `.saver` unreliable on Tahoe | Keep it as a compatibility path; use a versioned provider abstraction |
 | Wallpaper configuration corruption | No broad replacement; atomic writes, backup exact prior state, scoped rollback |
@@ -503,9 +527,11 @@ Product Name:          LiveWall
 Bundle Identifier:     com.ochurkin.LiveWall
 Interface:             SwiftUI
 Language:              Swift
-Min Deployment:        macOS 13
-LSUIElement:           YES
-Sandbox:               YES
+Min Deployment:        macOS 26 (project-level MACOSX_DEPLOYMENT_TARGET)
+LSUIElement:           NO (regular app with Dock icon)
+Sandbox:               NO for the app and .saver (ENABLE_APP_SANDBOX = NO); only the
+                       extension is sandboxed. The entitlements below are not wired into
+                       the app's build settings.
 Entitlements:          LiveWall/LiveWall.entitlements
   com.apple.security.app-sandbox: YES
   com.apple.security.files.user-selected.read-write: YES
